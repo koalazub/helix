@@ -510,6 +510,13 @@ impl View {
             ));
         }
 
+        // Add raw content (inline images, etc.)
+        if let Some(raw_content) = doc.raw_content.get(&self.id) {
+            if !raw_content.is_empty() {
+                text_annotations.add_raw_content(raw_content);
+            }
+        }
+
         text_annotations
     }
 

@@ -214,6 +214,9 @@ pub struct Document {
     // large refactor that would make `&mut Editor` available on the `DocumentDidChange` event.
     pub color_swatch_controller: TaskController,
 
+    /// Raw content annotations (inline images, etc.) by view
+    pub(crate) raw_content: HashMap<ViewId, Vec<helix_core::text_annotations::RawContent>>,
+
     pub uri: Option<Box<Url>>,
 
     pub pull_diagnostic_controller: TaskController,
@@ -734,6 +737,7 @@ impl Document {
             name: None,
             readonly: false,
             jump_labels: HashMap::new(),
+            raw_content: HashMap::new(),
             color_swatches: None,
             color_swatch_controller: TaskController::new(),
             uri: None,
@@ -2319,6 +2323,29 @@ impl Document {
 
     pub fn remove_jump_labels(&mut self, view_id: ViewId) {
         self.jump_labels.remove(&view_id);
+    }
+
+    pub fn add_raw_content(
+        &mut self,
+        view_id: ViewId,
+        content: helix_core::text_annotations::RawContent,
+    ) {
+        self.raw_content
+            .entry(view_id)
+            .or_insert_with(Vec::new)
+            .push(content);
+    }
+
+    pub fn set_raw_content(
+        &mut self,
+        view_id: ViewId,
+        content: Vec<helix_core::text_annotations::RawContent>,
+    ) {
+        self.raw_content.insert(view_id, content);
+    }
+
+    pub fn clear_raw_content(&mut self, view_id: ViewId) {
+        self.raw_content.remove(&view_id);
     }
 
     /// Get the inlay hints for this document and `view_id`.
