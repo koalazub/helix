@@ -68,6 +68,8 @@ pub struct FormattedGrapheme<'a> {
     pub line_idx: usize,
     /// Document char position at the start of the grapheme
     pub char_idx: usize,
+    /// Raw content (inline images, etc.) at this position
+    pub raw_content: Option<&'a crate::text_annotations::RawContent>,
 }
 
 impl FormattedGrapheme<'_> {
@@ -449,18 +451,29 @@ impl<'t> Iterator for DocumentFormatter<'t> {
             self.advance_grapheme(self.visual_pos.col, self.char_pos)?
         };
 
+        // Check for raw content at this position
+        let raw_content = self.annotations.raw_content_at(self.char_pos);
+
         let grapheme = FormattedGrapheme {
             raw: grapheme.grapheme,
             source: grapheme.source,
             visual_pos: self.visual_pos,
             line_idx: self.line_pos,
             char_idx: self.char_pos,
+            raw_content,
         };
 
         self.char_pos += grapheme.doc_chars();
         if !grapheme.is_virtual() {
             self.annotations.process_virtual_text_anchors(&grapheme);
         }
+
+        // Handle raw content height
+        if let Some(raw) = raw_content {
+            self.visual_pos.row += raw.height as usize;
+            self.visual_pos.col = 0;
+        }
+
         if grapheme.raw == Grapheme::Newline {
             // move to end of newline char
             self.visual_pos.col += 1;

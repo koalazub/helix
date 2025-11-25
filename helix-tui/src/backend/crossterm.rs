@@ -285,7 +285,15 @@ where
             SetForegroundColor(CColor::Reset),
             SetBackgroundColor(CColor::Reset),
             SetAttribute(CAttribute::Reset)
-        )
+        )?;
+
+        // Flush any raw bytes (inline images, etc.)
+        for (x, y, bytes) in &content.raw_writes {
+            queue!(self.buffer, MoveTo(*x, *y))?;
+            self.buffer.write_all(bytes)?;
+        }
+
+        Ok(())
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> {

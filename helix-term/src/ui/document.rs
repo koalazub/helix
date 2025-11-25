@@ -157,6 +157,13 @@ pub fn render_text(
         };
         decorations.decorate_grapheme(renderer, &grapheme);
 
+        // Handle raw content (inline images, etc.)
+        if let Some(raw) = grapheme.raw_content {
+            renderer.draw_raw_content(raw, grapheme.visual_pos);
+            last_line_end = 0;
+            continue;
+        }
+
         let virt = grapheme.is_virtual();
         let grapheme_width = renderer.draw_grapheme(
             grapheme.raw,
@@ -309,6 +316,25 @@ impl<'a> TextRenderer<'a> {
             style,
         );
         true
+    }
+
+    /// Draws raw terminal content (inline images, etc.) at the specified position.
+    pub fn draw_raw_content(
+        &mut self,
+        raw: &helix_core::text_annotations::RawContent,
+        mut position: Position,
+    ) {
+        if position.row < self.offset.row {
+            return;
+        }
+        position.row -= self.offset.row;
+
+        // Write raw bytes directly to the terminal via surface
+        self.surface.write_raw_bytes(
+            self.viewport.x + position.col as u16,
+            self.viewport.y + position.row as u16,
+            &raw.payload,
+        );
     }
 
     /// Draws a single `grapheme` at the current render position with a specified `style`.

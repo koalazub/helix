@@ -134,6 +134,8 @@ pub struct Buffer {
     /// The content of the buffer. The length of this Vec should always be equal to area.width *
     /// area.height
     pub content: Vec<Cell>,
+    /// Raw terminal bytes to write at specific positions (inline images, etc.)
+    pub raw_writes: Vec<(u16, u16, Vec<u8>)>,  // (x, y, bytes)
 }
 
 impl Buffer {
@@ -148,7 +150,11 @@ impl Buffer {
     pub fn filled(area: Rect, cell: &Cell) -> Buffer {
         let size = area.area();
         let content = vec![cell.clone(); size];
-        Buffer { area, content }
+        Buffer {
+            area,
+            content,
+            raw_writes: Vec::new(),
+        }
     }
 
     /// Returns a Buffer containing the given lines
@@ -288,6 +294,11 @@ impl Buffer {
             (self.area.x as usize + (i % self.area.width as usize)) as u16,
             (self.area.y as usize + (i / self.area.width as usize)) as u16,
         )
+    }
+
+    /// Write raw terminal bytes at the given position (for inline images, etc.)
+    pub fn write_raw_bytes(&mut self, x: u16, y: u16, bytes: &[u8]) {
+        self.raw_writes.push((x, y, bytes.to_vec()));
     }
 
     /// Print a string, starting at the position (x, y)
