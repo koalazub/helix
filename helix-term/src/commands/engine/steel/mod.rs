@@ -5729,6 +5729,40 @@ fn configure_engine_impl(mut engine: Engine) -> Engine {
         helix_core::find_workspace().0.to_str().unwrap().to_string()
     });
 
+    // Kernel management - synchronous functions for Steel
+    engine.register_fn("kernel-start", |lang: String, kernel_id: usize| {
+        helix_kernel_manager::start_kernel_sync(&lang, kernel_id as u32)
+            .map(|info| {
+                // Return kernel info as a hash map for Steel
+                format!("{{:kernel-id {} :pid {} :input-file \"{}\" :output-file \"{}\"}}",
+                    info.kernel_id,
+                    info.pid,
+                    info.input_file.display(),
+                    info.output_file.display())
+            })
+            .unwrap_or_else(|e| {
+                log::error!("Failed to start kernel: {}", e);
+                format!("{{:error \"{}\"}}", e)
+            })
+    });
+
+    engine.register_fn("kernel-execute", |kernel_id: usize, code: String| {
+        helix_kernel_manager::execute_kernel_sync(kernel_id as u32, &code)
+            .unwrap_or_else(|e| {
+                log::error!("Kernel execution failed: {}", e);
+                format!("Error: {}", e)
+            })
+    });
+
+    engine.register_fn("kernel-stop", |kernel_id: usize| {
+        helix_kernel_manager::stop_kernel_sync(kernel_id as u32)
+            .map(|_| "Kernel stopped".to_string())
+            .unwrap_or_else(|e| {
+                log::error!("Failed to stop kernel: {}", e);
+                format!("Error: {}", e)
+            })
+    });
+
     engine.register_fn("doc-id->usize", document_id_to_usize);
 
     // TODO: Remove that this is now in helix/core/misc
