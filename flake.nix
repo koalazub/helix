@@ -69,6 +69,7 @@
                 lld
                 cargo-flamegraph
                 rust-bin.nightly.latest.rust-analyzer
+                julia-bin
               ]
               ++ (lib.optional (stdenv.isx86_64 && stdenv.isLinux) cargo-tarpaulin)
               ++ (lib.optional stdenv.isLinux lldb);
@@ -88,8 +89,8 @@
       default = self.overlays.helix;
     };
   };
-  nixConfig = {
-    extra-substituters = ["https://helix.cachix.org"];
-    extra-trusted-public-keys = ["helix.cachix.org-1:ejp9KQpR1FBI2onstMQ34yogDm4OgU2ru6lIwPvuCVs="];
-  };
+  # nixConfig = {
+  #   extra-substituters = ["https://helix.cachix.org"];
+  #   extra-trusted-public-keys = ["helix.cachix.org-1:ejp9KQpR1FBI2onstMQ34yogDm4OgU2ru6lIwPvuCVs="];
+  # };
 }

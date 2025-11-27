@@ -330,7 +330,9 @@ impl<'a> TextRenderer<'a> {
         position.row -= self.offset.row;
 
         // Write raw bytes directly to the terminal via surface
+        // Include the ID for efficient diffing between frames
         self.surface.write_raw_bytes(
+            raw.id,
             self.viewport.x + position.col as u16,
             self.viewport.y + position.row as u16,
             &raw.payload,

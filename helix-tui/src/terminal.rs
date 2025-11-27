@@ -152,7 +152,31 @@ where
         let previous_buffer = &self.buffers[1 - self.current];
         let current_buffer = &self.buffers[self.current];
         let updates = previous_buffer.diff(current_buffer);
-        self.backend.draw(updates.into_iter())
+        self.backend.draw(updates.into_iter())?;
+
+        // Draw raw content (inline images, etc.) - only send new content
+        // Use ID-based diffing: only send raw writes with IDs not in previous frame
+        if !current_buffer.raw_writes.is_empty() {
+            use std::collections::HashSet;
+            let previous_ids: HashSet<u64> = previous_buffer
+                .raw_writes
+                .iter()
+                .map(|(id, _, _, _)| *id)
+                .collect();
+
+            let new_writes: Vec<_> = current_buffer
+                .raw_writes
+                .iter()
+                .filter(|(id, _, _, _)| !previous_ids.contains(id))
+                .cloned()
+                .collect();
+
+            if !new_writes.is_empty() {
+                self.backend.draw_raw(&new_writes)?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Updates the Terminal so that internal buffers match the requested size. Requested size will

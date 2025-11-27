@@ -31,6 +31,12 @@ pub trait Backend {
     fn draw<'a, I>(&mut self, content: I) -> Result<(), io::Error>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>;
+    /// Draws raw bytes to the terminal (for inline images, graphics protocols, etc.)
+    /// Format: (id, x, y, bytes) - id is used for diffing at the Terminal level.
+    /// Default implementation does nothing - backends override if they support raw output.
+    fn draw_raw(&mut self, _content: &[(u64, u16, u16, Vec<u8>)]) -> Result<(), io::Error> {
+        Ok(())
+    }
     /// Hides the cursor
     fn hide_cursor(&mut self) -> Result<(), io::Error>;
     /// Sets the cursor to the given shape

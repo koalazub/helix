@@ -135,7 +135,8 @@ pub struct Buffer {
     /// area.height
     pub content: Vec<Cell>,
     /// Raw terminal bytes to write at specific positions (inline images, etc.)
-    pub raw_writes: Vec<(u16, u16, Vec<u8>)>,  // (x, y, bytes)
+    /// Format: (id, x, y, bytes) - id is used for efficient diffing between frames
+    pub raw_writes: Vec<(u64, u16, u16, Vec<u8>)>,
 }
 
 impl Buffer {
@@ -297,8 +298,9 @@ impl Buffer {
     }
 
     /// Write raw terminal bytes at the given position (for inline images, etc.)
-    pub fn write_raw_bytes(&mut self, x: u16, y: u16, bytes: &[u8]) {
-        self.raw_writes.push((x, y, bytes.to_vec()));
+    /// The id is used for efficient diffing - only content with new IDs is sent to terminal.
+    pub fn write_raw_bytes(&mut self, id: u64, x: u16, y: u16, bytes: &[u8]) {
+        self.raw_writes.push((id, x, y, bytes.to_vec()));
     }
 
     /// Print a string, starting at the position (x, y)
@@ -624,6 +626,7 @@ impl Buffer {
         for c in &mut self.content {
             c.reset();
         }
+        self.raw_writes.clear();
     }
 
     /// Clear an area in the buffer

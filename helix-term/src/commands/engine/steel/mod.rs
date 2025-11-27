@@ -13,7 +13,7 @@ use helix_core::{
             SoftWrap,
         },
     },
-    text_annotations::{InlineAnnotation, RawContent},
+    text_annotations::InlineAnnotation,
     Range, Selection, Tendril, Transaction,
 };
 use helix_event::register_hook;
@@ -5763,49 +5763,13 @@ fn configure_engine_impl(mut engine: Engine) -> Engine {
             })
     });
 
-    // Notebook parsing - async/lazy loading
-    // Start background scan, returns notebook ID immediately
-    engine.register_fn("notebook-scan-async", |path: String| {
-        helix_kernel_manager::notebook::notebook_scan_async_start(path) as usize
-    });
-
-    // Check if notebook scan is complete
-    engine.register_fn("notebook-ready?", |notebook_id: usize| {
-        helix_kernel_manager::notebook::notebook_ready(notebook_id as u64)
-    });
-
-    // Get notebook cell count (returns 0 if not ready)
-    engine.register_fn("notebook-cell-count", |notebook_id: usize| {
-        helix_kernel_manager::notebook::notebook_cell_count(notebook_id as u64)
-    });
-
-    // Get cell metadata (lightweight) - returns JSON string
-    engine.register_fn("notebook-get-cell-index", |notebook_id: usize, cell_idx: usize| {
-        helix_kernel_manager::notebook::notebook_get_cell_index(notebook_id as u64, cell_idx)
-    });
-
-    // Load full cell data (on-demand) - returns JSON string
-    engine.register_fn("notebook-load-cell", |notebook_id: usize, cell_idx: usize| {
-        helix_kernel_manager::notebook::notebook_load_cell(notebook_id as u64, cell_idx)
-    });
-
-    // Load multiple cells - returns JSON array string
-    engine.register_fn("notebook-load-cells", |notebook_id: usize, indices: Vec<usize>| {
-        helix_kernel_manager::notebook::notebook_load_cells(notebook_id as u64, indices)
-    });
-
-    // Close notebook and free memory
-    engine.register_fn("notebook-close", |notebook_id: usize| {
-        helix_kernel_manager::notebook::notebook_close(notebook_id as u64)
-    });
-
     // RawContent functions for inline image rendering
     use std::sync::atomic::{AtomicU64, Ordering};
     static RAW_CONTENT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
     // Add raw content (inline images, etc.) to the current document/view
     // Payload is raw terminal escape sequences (e.g., Kitty graphics protocol)
-    module.register_fn(
+    engine.register_fn(
         "add-raw-content!",
         |cx: &mut Context, payload: Vec<u8>, height: u16, char_idx: usize| {
             use std::sync::Arc;

@@ -559,6 +559,15 @@ impl Backend for TerminaBackend {
         Ok(Rect::new(0, 0, cols, rows))
     }
 
+    fn draw_raw(&mut self, content: &[(u64, u16, u16, Vec<u8>)]) -> io::Result<()> {
+        use std::io::Write;
+        for (_id, x, y, bytes) in content {
+            write!(self.terminal, "\x1b[{};{}H", y + 1, x + 1)?;
+            self.terminal.write_all(bytes)?;
+        }
+        Ok(())
+    }
+
     fn flush(&mut self) -> io::Result<()> {
         self.terminal.flush()
     }

@@ -285,14 +285,14 @@ where
             SetForegroundColor(CColor::Reset),
             SetBackgroundColor(CColor::Reset),
             SetAttribute(CAttribute::Reset)
-        )?;
+        )
+    }
 
-        // Flush any raw bytes (inline images, etc.)
-        for (x, y, bytes) in &content.raw_writes {
+    fn draw_raw(&mut self, content: &[(u64, u16, u16, Vec<u8>)]) -> io::Result<()> {
+        for (_id, x, y, bytes) in content {
             queue!(self.buffer, MoveTo(*x, *y))?;
             self.buffer.write_all(bytes)?;
         }
-
         Ok(())
     }
 
