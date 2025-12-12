@@ -7187,26 +7187,14 @@ pub fn add_raw_content(cx: &mut Context, payload: String, image_id: u64, height:
     let (view, _doc) = current!(cx.editor);
     let view_id = view.id;
     let doc_id = view.doc;
-
-    let payload_len = payload.len();
     let payload_bytes = payload.into_bytes();
-
-    log::error!(
-        "[add-raw-content!] image_id={}, view_id={:?}, doc_id={:?}, char_idx={}, height={}, payload_bytes={}",
-        image_id, view_id, doc_id, char_idx, height, payload_len
-    );
 
     if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
         let content = RawContent::new(char_idx, image_id, payload_bytes, height);
         doc.add_raw_content(view_id, content);
-        log::error!("[add-raw-content!] Successfully added to document");
-    } else {
-        log::error!("[add-raw-content!] Document not found for doc_id={:?}", doc_id);
     }
 }
 
-/// Add raw content with Unicode placeholder support for proper scrolling.
-/// The placeholder_rows string contains newline-separated placeholder text rows.
 pub fn add_raw_content_with_placeholders(
     cx: &mut Context,
     payload: String,
@@ -7222,21 +7210,11 @@ pub fn add_raw_content_with_placeholders(
     let doc_id = view.doc;
 
     let id = RAW_CONTENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-
-    let payload_len = payload.len();
     let payload_bytes = payload.into_bytes();
     let placeholder_rows: Vec<String> = placeholder_rows_str.lines().map(|s| s.to_string()).collect();
-
-    log::error!(
-        "[add-raw-content-with-placeholders!] id={}, view_id={:?}, doc_id={:?}, char_idx={}, height={}, width={}, placeholder_rows={}, payload_bytes={}",
-        id, view_id, doc_id, char_idx, height, width, placeholder_rows.len(), payload_len
-    );
 
     if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
         let content = RawContent::with_placeholders(char_idx, id, payload_bytes, height, width, placeholder_rows);
         doc.add_raw_content(view_id, content);
-        log::error!("[add-raw-content-with-placeholders!] Successfully added to document");
-    } else {
-        log::error!("[add-raw-content-with-placeholders!] Document not found for doc_id={:?}", doc_id);
     }
 }

@@ -129,15 +129,9 @@ impl Default for Cell {
 /// ```
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Buffer {
-    /// The area represented by this buffer
     pub area: Rect,
-    /// The content of the buffer. The length of this Vec should always be equal to area.width *
-    /// area.height
     pub content: Vec<Cell>,
-    /// Raw terminal bytes to write at specific positions (inline images, etc.)
-    /// Format: (id, x, y, bytes) - id is used for efficient diffing between frames
     pub raw_writes: Vec<(u64, u16, u16, Vec<u8>)>,
-    /// Image IDs to delete (scrolled out of viewport)
     pub pending_deletes: Vec<u64>,
 }
 
@@ -300,21 +294,10 @@ impl Buffer {
         )
     }
 
-    /// Write raw terminal bytes at the given position (for inline images, etc.)
-    /// The id is used for efficient diffing - only content with new IDs is sent to terminal.
     pub fn write_raw_bytes(&mut self, id: u64, x: u16, y: u16, bytes: &[u8]) {
-        log::error!(
-            "[buffer.rs:write_raw_bytes] id={}, pos=({},{}), bytes={}",
-            id, x, y, bytes.len()
-        );
         self.raw_writes.push((id, x, y, bytes.to_vec()));
-        log::error!(
-            "[buffer.rs:write_raw_bytes] raw_writes now has {} items",
-            self.raw_writes.len()
-        );
     }
 
-    /// Queue a raw image for deletion (e.g., when scrolled out of viewport)
     pub fn delete_raw_image(&mut self, id: u64) {
         if !self.pending_deletes.contains(&id) {
             self.pending_deletes.push(id);

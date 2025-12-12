@@ -1257,8 +1257,6 @@ impl Document {
         self.apply(&transaction, view.id);
         self.append_changes_to_history(view);
         self.reset_modified();
-        
-        // Clear any inline images since they're not part of the saved file
         self.raw_content.clear();
         self.pickup_last_saved_time();
         self.detect_indent_and_line_ending();

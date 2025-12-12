@@ -568,9 +568,7 @@ impl Backend for TerminaBackend {
         use std::io::Write;
 
         for (id, x, y, bytes) in content {
-            // Move cursor to position and transmit image with a=T (transmit AND display)
-            let cursor_cmd = format!("\x1b[{};{}H", y + 1, x + 1);
-            write!(self.terminal, "{}", cursor_cmd)?;
+            write!(self.terminal, "\x1b[{};{}H", y + 1, x + 1)?;
             self.terminal.write_all(bytes)?;
             self.transmitted_images.insert(*id);
         }
@@ -584,9 +582,7 @@ impl Backend for TerminaBackend {
         use std::io::Write;
 
         for id in ids {
-            // Kitty protocol: a=d (delete), d=I (by ID), i=<id>, q=2 (quiet)
-            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
-            write!(self.terminal, "{}", delete_cmd)?;
+            write!(self.terminal, "\x1b_Ga=d,d=I,i={},q=2\x1b\\", id)?;
             self.transmitted_images.remove(id);
         }
         if !ids.is_empty() {
@@ -598,10 +594,8 @@ impl Backend for TerminaBackend {
     fn clear_all_images(&mut self) -> io::Result<()> {
         use std::io::Write;
 
-        // Delete all images we've transmitted
         for id in self.transmitted_images.drain() {
-            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
-            write!(self.terminal, "{}", delete_cmd)?;
+            write!(self.terminal, "\x1b_Ga=d,d=I,i={},q=2\x1b\\", id)?;
         }
         Ok(())
     }
@@ -610,18 +604,16 @@ impl Backend for TerminaBackend {
         use std::io::Write;
 
         let current_set: std::collections::HashSet<u64> = current_ids.iter().copied().collect();
-        
-        // Find images we've transmitted that are no longer current
-        let stale: Vec<u64> = self.transmitted_images
+
+        let stale: Vec<u64> = self
+            .transmitted_images
             .iter()
             .filter(|id| !current_set.contains(id))
             .copied()
             .collect();
 
-        // Delete stale images
         for id in &stale {
-            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
-            write!(self.terminal, "{}", delete_cmd)?;
+            write!(self.terminal, "\x1b_Ga=d,d=I,i={},q=2\x1b\\", id)?;
             self.transmitted_images.remove(id);
         }
 

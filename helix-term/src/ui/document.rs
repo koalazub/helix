@@ -331,9 +331,7 @@ impl<'a> TextRenderer<'a> {
         raw: &helix_core::text_annotations::RawContent,
         mut position: Position,
     ) {
-        // Check if image is scrolled out of view (above viewport)
         if position.row < self.offset.row {
-            // Image is above viewport - don't render
             self.surface.delete_raw_image(raw.id);
             return;
         }
@@ -342,67 +340,32 @@ impl<'a> TextRenderer<'a> {
         let screen_x = self.viewport.x + position.col as u16;
         let screen_y = self.viewport.y + position.row as u16;
 
-        // Check if image start is outside viewport bounds
-        if screen_x >= self.viewport.x + self.viewport.width {
-            // Image starts beyond right edge - don't render
-            self.surface.delete_raw_image(raw.id);
-            return;
-        }
-        if screen_y >= self.viewport.y + self.viewport.height {
-            // Image is below viewport - don't render
+        if screen_x >= self.viewport.x + self.viewport.width
+            || screen_y >= self.viewport.y + self.viewport.height
+        {
             self.surface.delete_raw_image(raw.id);
             return;
         }
 
-        // Check if image would extend beyond viewport bottom
         let viewport_bottom = self.viewport.y + self.viewport.height;
-        let image_bottom = screen_y + raw.height;
-        if image_bottom > viewport_bottom {
-            // Image extends past viewport - don't render to avoid spillover
-            // TODO: Could clip image rows instead of hiding entirely
+        if screen_y + raw.height > viewport_bottom {
             self.surface.delete_raw_image(raw.id);
             return;
         }
 
         if raw.uses_placeholders() {
-            // Unicode placeholder rendering:
-            // 1. Send transmission + placement escape sequences via raw_writes (sent once)
-            self.surface.write_raw_bytes(
-                raw.id,
-                screen_x,
-                screen_y,
-                &raw.payload,
-            );
+            self.surface.write_raw_bytes(raw.id, screen_x, screen_y, &raw.payload);
 
-            // 2. Write placeholder text rows to normal cells (rendered every frame)
             if let Some(placeholder_rows) = &raw.placeholder_rows {
-                log::error!(
-                    "[document.rs:draw_raw_content] Writing {} placeholder rows at ({}, {})",
-                    placeholder_rows.len(), screen_x, screen_y
-                );
                 for (row_idx, row_text) in placeholder_rows.iter().enumerate() {
                     let y = screen_y + row_idx as u16;
-                    if y < self.viewport.y + self.viewport.height {
-                        // Write placeholder text as normal styled text
-                        // The placeholder chars + foreground colour will be interpreted by the terminal
-                        self.surface.set_string(
-                            screen_x,
-                            y,
-                            row_text,
-                            Style::default(),
-                        );
+                    if y < viewport_bottom {
+                        self.surface.set_string(screen_x, y, row_text, Style::default());
                     }
                 }
             }
         } else {
-            // Legacy raw content: write bytes directly to raw_writes
-            // The terminal backend will skip if already transmitted
-            self.surface.write_raw_bytes(
-                raw.id,
-                screen_x,
-                screen_y,
-                &raw.payload,
-            );
+            self.surface.write_raw_bytes(raw.id, screen_x, screen_y, &raw.payload);
         }
     }
 
