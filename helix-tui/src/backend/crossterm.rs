@@ -289,11 +289,44 @@ where
     }
 
     fn draw_raw(&mut self, content: &[(u64, u16, u16, Vec<u8>)]) -> io::Result<()> {
-        for (_id, x, y, bytes) in content {
+        log::error!(
+            "[crossterm.rs:draw_raw] Writing {} raw content items",
+            content.len()
+        );
+        for (id, x, y, bytes) in content {
+            log::error!(
+                "[crossterm.rs:draw_raw] id={}, MoveTo({},{}), bytes={}, first_bytes={:?}",
+                id, x, y, bytes.len(),
+                &bytes[..std::cmp::min(50, bytes.len())]
+            );
             queue!(self.buffer, MoveTo(*x, *y))?;
             self.buffer.write_all(bytes)?;
         }
+        log::error!("[crossterm.rs:draw_raw] Completed writing raw bytes");
         Ok(())
+    }
+
+    fn delete_images(&mut self, ids: &[u64]) -> io::Result<()> {
+        for id in ids {
+            // Kitty protocol: a=d (delete), d=I (by ID), i=<id>, q=2 (quiet)
+            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
+            self.buffer.write_all(delete_cmd.as_bytes())?;
+        }
+        Ok(())
+    }
+
+    fn clear_all_images(&mut self) -> io::Result<()> {
+        // Crossterm backend doesn't track transmitted images, so delete all visible
+        // Kitty protocol: a=d (delete), d=a (all visible), q=2 (quiet)
+        let delete_cmd = "\x1b_Ga=d,d=a,q=2\x1b\\";
+        self.buffer.write_all(delete_cmd.as_bytes())?;
+        Ok(())
+    }
+
+    fn sync_images(&mut self, _current_ids: &[u64]) -> io::Result<Vec<u64>> {
+        // Crossterm doesn't track images, just delete all and let them be redrawn
+        self.clear_all_images()?;
+        Ok(Vec::new())
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> {

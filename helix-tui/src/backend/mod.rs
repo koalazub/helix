@@ -37,6 +37,22 @@ pub trait Backend {
     fn draw_raw(&mut self, _content: &[(u64, u16, u16, Vec<u8>)]) -> Result<(), io::Error> {
         Ok(())
     }
+    /// Deletes images that have scrolled out of viewport.
+    /// Default implementation does nothing - backends override if they support graphics.
+    fn delete_images(&mut self, _ids: &[u64]) -> Result<(), io::Error> {
+        Ok(())
+    }
+    /// Clears all transmitted images from the screen. Called before each frame redraw.
+    /// Default implementation does nothing - backends override if they support graphics.
+    fn clear_all_images(&mut self) -> Result<(), io::Error> {
+        Ok(())
+    }
+    /// Syncs image state: deletes any transmitted images not in the current set.
+    /// Returns IDs of images that were deleted.
+    /// Default implementation does nothing - backends override if they support graphics.
+    fn sync_images(&mut self, _current_ids: &[u64]) -> Result<Vec<u64>, io::Error> {
+        Ok(Vec::new())
+    }
     /// Hides the cursor
     fn hide_cursor(&mut self) -> Result<(), io::Error>;
     /// Sets the cursor to the given shape

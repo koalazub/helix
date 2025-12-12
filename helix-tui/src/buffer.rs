@@ -137,6 +137,8 @@ pub struct Buffer {
     /// Raw terminal bytes to write at specific positions (inline images, etc.)
     /// Format: (id, x, y, bytes) - id is used for efficient diffing between frames
     pub raw_writes: Vec<(u64, u16, u16, Vec<u8>)>,
+    /// Image IDs to delete (scrolled out of viewport)
+    pub pending_deletes: Vec<u64>,
 }
 
 impl Buffer {
@@ -155,6 +157,7 @@ impl Buffer {
             area,
             content,
             raw_writes: Vec::new(),
+            pending_deletes: Vec::new(),
         }
     }
 
@@ -309,6 +312,13 @@ impl Buffer {
             "[buffer.rs:write_raw_bytes] raw_writes now has {} items",
             self.raw_writes.len()
         );
+    }
+
+    /// Queue a raw image for deletion (e.g., when scrolled out of viewport)
+    pub fn delete_raw_image(&mut self, id: u64) {
+        if !self.pending_deletes.contains(&id) {
+            self.pending_deletes.push(id);
+        }
     }
 
     /// Print a string, starting at the position (x, y)
@@ -635,6 +645,7 @@ impl Buffer {
             c.reset();
         }
         self.raw_writes.clear();
+        self.pending_deletes.clear();
     }
 
     /// Clear an area in the buffer

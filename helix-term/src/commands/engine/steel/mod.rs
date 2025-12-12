@@ -741,7 +741,7 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
         "Commits any pending document changes to the undo history. Call this after document modifications in async callbacks to prevent selection tracking crashes."
     );
 
-    let mut template_function_arity_3 = |name: &str, doc: &str| {
+    let mut template_function_arity_4 = |name: &str, doc: &str| {
         if generate_sources {
             let docstring = format_docstring(doc);
 
@@ -750,25 +750,55 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
 (provide {})
 ;;@doc
 {}
-(define ({} arg1 arg2 arg3)
-    (helix.static.{} *helix.cx* arg1 arg2 arg3))
+(define ({} arg1 arg2 arg3 arg4)
+    (helix.static.{} *helix.cx* arg1 arg2 arg3 arg4))
 "#,
                 name, docstring, name, name
             ));
         }
     };
 
-    macro_rules! function3 {
+    macro_rules! function4 {
         ($name:expr, $function:expr, $doc:expr) => {{
             module.register_fn($name, $function);
-            template_function_arity_3($name, $doc);
+            template_function_arity_4($name, $doc);
         }};
     }
 
-    function3!(
+    function4!(
         "add-raw-content!",
         add_raw_content,
-        "Add raw content (e.g., Kitty graphics escape sequences) to the current document for inline rendering. Arguments: payload (string), height (rows), char_idx (position)"
+        "Add raw content (e.g., Kitty graphics escape sequences) to the current document for inline rendering. Arguments: payload (string), image_id (kitty image id), height (rows), char_idx (position)"
+    );
+
+    let mut template_function_arity_5 = |name: &str, doc: &str| {
+        if generate_sources {
+            let docstring = format_docstring(doc);
+
+            builtin_static_command_module.push_str(&format!(
+                r#"
+(provide {})
+;;@doc
+{}
+(define ({} arg1 arg2 arg3 arg4 arg5)
+    (helix.static.{} *helix.cx* arg1 arg2 arg3 arg4 arg5))
+"#,
+                name, docstring, name, name
+            ));
+        }
+    };
+
+    macro_rules! function5 {
+        ($name:expr, $function:expr, $doc:expr) => {{
+            module.register_fn($name, $function);
+            template_function_arity_5($name, $doc);
+        }};
+    }
+
+    function5!(
+        "add-raw-content-with-placeholders!",
+        add_raw_content_with_placeholders,
+        "Add raw content with Unicode placeholder support for proper scrolling. Arguments: payload (string), height (rows), width (cols), placeholder_rows (newline-separated string), char_idx (position)"
     );
 
     let mut template_function_no_context = |name: &str, doc: &str| {
@@ -7150,7 +7180,41 @@ pub fn commit_changes_to_history(cx: &mut Context) {
 
 /// Add raw content (inline images, etc.) to the current document/view
 /// Payload is raw terminal escape sequences (e.g., Kitty graphics protocol)
-pub fn add_raw_content(cx: &mut Context, payload: String, height: u16, char_idx: usize) {
+/// The image_id must match the ID embedded in the Kitty escape sequence for proper deletion.
+pub fn add_raw_content(cx: &mut Context, payload: String, image_id: u64, height: u16, char_idx: usize) {
+    use helix_core::text_annotations::RawContent;
+
+    let (view, _doc) = current!(cx.editor);
+    let view_id = view.id;
+    let doc_id = view.doc;
+
+    let payload_len = payload.len();
+    let payload_bytes = payload.into_bytes();
+
+    log::error!(
+        "[add-raw-content!] image_id={}, view_id={:?}, doc_id={:?}, char_idx={}, height={}, payload_bytes={}",
+        image_id, view_id, doc_id, char_idx, height, payload_len
+    );
+
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        let content = RawContent::new(char_idx, image_id, payload_bytes, height);
+        doc.add_raw_content(view_id, content);
+        log::error!("[add-raw-content!] Successfully added to document");
+    } else {
+        log::error!("[add-raw-content!] Document not found for doc_id={:?}", doc_id);
+    }
+}
+
+/// Add raw content with Unicode placeholder support for proper scrolling.
+/// The placeholder_rows string contains newline-separated placeholder text rows.
+pub fn add_raw_content_with_placeholders(
+    cx: &mut Context,
+    payload: String,
+    height: u16,
+    width: u16,
+    placeholder_rows_str: String,
+    char_idx: usize,
+) {
     use helix_core::text_annotations::RawContent;
 
     let (view, _doc) = current!(cx.editor);
@@ -7161,17 +7225,18 @@ pub fn add_raw_content(cx: &mut Context, payload: String, height: u16, char_idx:
 
     let payload_len = payload.len();
     let payload_bytes = payload.into_bytes();
+    let placeholder_rows: Vec<String> = placeholder_rows_str.lines().map(|s| s.to_string()).collect();
 
     log::error!(
-        "[add-raw-content!] id={}, view_id={:?}, doc_id={:?}, char_idx={}, height={}, payload_bytes={}",
-        id, view_id, doc_id, char_idx, height, payload_len
+        "[add-raw-content-with-placeholders!] id={}, view_id={:?}, doc_id={:?}, char_idx={}, height={}, width={}, placeholder_rows={}, payload_bytes={}",
+        id, view_id, doc_id, char_idx, height, width, placeholder_rows.len(), payload_len
     );
 
     if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
-        let content = RawContent::new(char_idx, id, payload_bytes, height);
+        let content = RawContent::with_placeholders(char_idx, id, payload_bytes, height, width, placeholder_rows);
         doc.add_raw_content(view_id, content);
-        log::error!("[add-raw-content!] Successfully added to document");
+        log::error!("[add-raw-content-with-placeholders!] Successfully added to document");
     } else {
-        log::error!("[add-raw-content!] Document not found for doc_id={:?}", doc_id);
+        log::error!("[add-raw-content-with-placeholders!] Document not found for doc_id={:?}", doc_id);
     }
 }

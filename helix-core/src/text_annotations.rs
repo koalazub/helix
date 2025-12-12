@@ -103,6 +103,8 @@ pub struct RawContent {
     pub id: u64,
 
     /// Raw bytes to write (escape sequences, etc.).
+    /// For Unicode placeholder images, this contains the transmission + placement
+    /// escape sequences that are sent ONCE to the terminal.
     /// Arc-wrapped for cheap cloning during layout calculations.
     pub payload: Arc<Vec<u8>>,
 
@@ -111,6 +113,15 @@ pub struct RawContent {
 
     /// Character index where this raw content should be inserted.
     pub char_idx: usize,
+
+    /// Width in terminal columns (for Unicode placeholder images).
+    /// If set, placeholder text will be written to normal cells instead of raw_writes.
+    pub width: Option<u16>,
+
+    /// Placeholder text rows for Unicode placeholder rendering.
+    /// Each entry is a row of placeholder text to render in normal cells.
+    /// If present, the payload is sent once, and these strings are rendered each frame.
+    pub placeholder_rows: Option<Arc<Vec<String>>>,
 }
 
 impl RawContent {
@@ -120,7 +131,36 @@ impl RawContent {
             id,
             payload: Arc::new(payload),
             height,
+            width: None,
+            placeholder_rows: None,
         }
+    }
+
+    /// Create a RawContent for Unicode placeholder image rendering.
+    ///
+    /// - `payload`: Transmission + placement escape sequences (sent once)
+    /// - `placeholder_rows`: Placeholder text rows (rendered each frame as normal text)
+    pub fn with_placeholders(
+        char_idx: usize,
+        id: u64,
+        payload: Vec<u8>,
+        height: u16,
+        width: u16,
+        placeholder_rows: Vec<String>,
+    ) -> Self {
+        Self {
+            char_idx,
+            id,
+            payload: Arc::new(payload),
+            height,
+            width: Some(width),
+            placeholder_rows: Some(Arc::new(placeholder_rows)),
+        }
+    }
+
+    /// Returns true if this content uses Unicode placeholder rendering
+    pub fn uses_placeholders(&self) -> bool {
+        self.placeholder_rows.is_some()
     }
 }
 

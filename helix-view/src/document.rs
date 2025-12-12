@@ -1257,6 +1257,9 @@ impl Document {
         self.apply(&transaction, view.id);
         self.append_changes_to_history(view);
         self.reset_modified();
+        
+        // Clear any inline images since they're not part of the saved file
+        self.raw_content.clear();
         self.pickup_last_saved_time();
         self.detect_indent_and_line_ending();
 
@@ -2575,6 +2578,51 @@ mod test {
             .to_string(),
             helix_core::NATIVE_LINE_ENDING.as_str()
         );
+    }
+
+    #[test]
+    fn test_raw_content_cleared_on_reload() {
+        use crate::editor::GutterConfig;
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a temp file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "hello world").unwrap();
+        temp_file.flush().unwrap();
+
+        let mut doc = Document::open(
+            temp_file.path(),
+            None,
+            false,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        )
+        .unwrap();
+
+        let view_id = ViewId::default();
+        let mut view = View::new(doc.id(), GutterConfig::default());
+
+        // Add some raw content (simulating an inline image)
+        let raw_content = helix_core::text_annotations::RawContent {
+            id: 1,
+            payload: std::sync::Arc::new(vec![1, 2, 3]),
+            height: 5,
+            char_idx: 0,
+            width: None,
+            placeholder_rows: None,
+        };
+        doc.add_raw_content(view_id, raw_content);
+
+        // Verify raw_content is present
+        assert!(!doc.raw_content.is_empty(), "raw_content should have an entry");
+
+        // Reload the document
+        let provider_registry = helix_vcs::DiffProviderRegistry::default();
+        doc.reload(&mut view, &provider_registry).unwrap();
+
+        // Verify raw_content is cleared after reload
+        assert!(doc.raw_content.is_empty(), "raw_content should be cleared after reload");
     }
 
     macro_rules! decode {

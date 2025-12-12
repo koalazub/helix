@@ -453,6 +453,12 @@ impl<'t> Iterator for DocumentFormatter<'t> {
 
         // Check for raw content at this position
         let raw_content = self.annotations.raw_content_at(self.char_pos);
+        if let Some(raw) = raw_content {
+            log::error!(
+                "[doc_formatter] raw_content_at(char_pos={}) -> id={}, height={}, payload_bytes={}",
+                self.char_pos, raw.id, raw.height, raw.payload.len()
+            );
+        }
 
         let grapheme = FormattedGrapheme {
             raw: grapheme.grapheme,

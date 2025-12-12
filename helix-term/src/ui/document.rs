@@ -331,13 +331,10 @@ impl<'a> TextRenderer<'a> {
         raw: &helix_core::text_annotations::RawContent,
         mut position: Position,
     ) {
-        log::error!(
-            "[document.rs:draw_raw_content] id={}, position=({},{}), height={}, payload_bytes={}, offset.row={}, uses_placeholders={}",
-            raw.id, position.row, position.col, raw.height, raw.payload.len(), self.offset.row, raw.uses_placeholders()
-        );
-
+        // Check if image is scrolled out of view (above viewport)
         if position.row < self.offset.row {
-            log::error!("[document.rs:draw_raw_content] Skipping: position.row < offset.row");
+            // Image is above viewport - don't render
+            self.surface.delete_raw_image(raw.id);
             return;
         }
         position.row -= self.offset.row;
@@ -345,17 +342,15 @@ impl<'a> TextRenderer<'a> {
         let screen_x = self.viewport.x + position.col as u16;
         let screen_y = self.viewport.y + position.row as u16;
 
-        log::error!(
-            "[document.rs:draw_raw_content] Writing to screen ({}, {}), viewport=({}, {}) dim={}x{}",
-            screen_x, screen_y, self.viewport.x, self.viewport.y, self.viewport.width, self.viewport.height
-        );
-
-        // Skip if position is outside viewport (scrolled out of view)
+        // Check if image start is outside viewport bounds
+        if screen_x >= self.viewport.x + self.viewport.width {
+            // Image starts beyond right edge - don't render
+            self.surface.delete_raw_image(raw.id);
+            return;
+        }
         if screen_y >= self.viewport.y + self.viewport.height {
-            log::error!(
-                "[document.rs:draw_raw_content] Skipping: screen_y={} is outside viewport (max={})",
-                screen_y, self.viewport.y + self.viewport.height - 1
-            );
+            // Image is below viewport - don't render
+            self.surface.delete_raw_image(raw.id);
             return;
         }
 

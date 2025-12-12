@@ -151,19 +151,75 @@ where
     pub fn flush(&mut self) -> io::Result<()> {
         let previous_buffer = &self.buffers[1 - self.current];
         let current_buffer = &self.buffers[self.current];
+
+        // Get current image IDs that should be visible
+        let current_image_ids: Vec<u64> = current_buffer
+            .raw_writes
+            .iter()
+            .map(|(id, _, _, _)| *id)
+            .collect();
+
+        // Sync backend state: delete any stale images from previous sessions/frames
+        self.backend.sync_images(&current_image_ids)?;
+
+        // Build position maps for diffing
+        let prev_images: std::collections::HashMap<u64, (u16, u16)> = previous_buffer
+            .raw_writes
+            .iter()
+            .map(|(id, x, y, _)| (*id, (*x, *y)))
+            .collect();
+
+        let curr_images: std::collections::HashMap<u64, (u16, u16)> = current_buffer
+            .raw_writes
+            .iter()
+            .map(|(id, x, y, _)| (*id, (*x, *y)))
+            .collect();
+
+        // Find images to delete: moved position (sync_images already handled removed ones)
+        let mut to_delete: Vec<u64> = Vec::new();
+        for (id, (px, py)) in &prev_images {
+            if let Some((cx, cy)) = curr_images.get(id) {
+                if cx != px || cy != py {
+                    to_delete.push(*id); // Image moved
+                }
+            }
+        }
+
+        // Also delete images explicitly marked for deletion (scrolled out of viewport)
+        for id in &current_buffer.pending_deletes {
+            if !to_delete.contains(id) {
+                to_delete.push(*id);
+            }
+        }
+
+        // Find images to draw: new or moved
+        let to_draw: Vec<&(u64, u16, u16, Vec<u8>)> = current_buffer
+            .raw_writes
+            .iter()
+            .filter(|(id, x, y, _)| {
+                match prev_images.get(id) {
+                    None => true, // New image
+                    Some((px, py)) => x != px || y != py, // Moved
+                }
+            })
+            .collect();
+
+        // Delete moved images
+        if !to_delete.is_empty() {
+            self.backend.delete_images(&to_delete)?;
+        }
+
+        // Draw text
         let updates = previous_buffer.diff(current_buffer);
         self.backend.draw(updates.into_iter())?;
 
-        // Draw raw content (inline images, etc.)
-        // Raw content must be re-sent each frame because text redraws overwrite images.
-        // The terminal doesn't persist images across redraws - they're escape sequences
-        // that render at a specific cursor position, and get overwritten by subsequent text.
-        if !current_buffer.raw_writes.is_empty() {
-            log::error!(
-                "[terminal.rs:flush] Sending {} raw_writes",
-                current_buffer.raw_writes.len()
-            );
-            self.backend.draw_raw(&current_buffer.raw_writes)?;
+        // Draw new/moved images
+        if !to_draw.is_empty() {
+            let draw_data: Vec<(u64, u16, u16, Vec<u8>)> = to_draw
+                .into_iter()
+                .map(|(id, x, y, bytes)| (*id, *x, *y, bytes.clone()))
+                .collect();
+            self.backend.draw_raw(&draw_data)?;
         }
 
         Ok(())

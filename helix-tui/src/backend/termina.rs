@@ -568,19 +568,68 @@ impl Backend for TerminaBackend {
         use std::io::Write;
 
         for (id, x, y, bytes) in content {
-            // Delete any existing image with this ID before redrawing
-            // Kitty protocol: a=d (delete), d=I (by ID), i=<id>, q=2 (quiet)
-            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
-            write!(self.terminal, "{}", delete_cmd)?;
-
             // Move cursor to position and transmit image with a=T (transmit AND display)
             let cursor_cmd = format!("\x1b[{};{}H", y + 1, x + 1);
             write!(self.terminal, "{}", cursor_cmd)?;
             self.terminal.write_all(bytes)?;
-            self.terminal.flush()?;
             self.transmitted_images.insert(*id);
         }
+        if !content.is_empty() {
+            self.terminal.flush()?;
+        }
         Ok(())
+    }
+
+    fn delete_images(&mut self, ids: &[u64]) -> io::Result<()> {
+        use std::io::Write;
+
+        for id in ids {
+            // Kitty protocol: a=d (delete), d=I (by ID), i=<id>, q=2 (quiet)
+            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
+            write!(self.terminal, "{}", delete_cmd)?;
+            self.transmitted_images.remove(id);
+        }
+        if !ids.is_empty() {
+            self.terminal.flush()?;
+        }
+        Ok(())
+    }
+
+    fn clear_all_images(&mut self) -> io::Result<()> {
+        use std::io::Write;
+
+        // Delete all images we've transmitted
+        for id in self.transmitted_images.drain() {
+            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
+            write!(self.terminal, "{}", delete_cmd)?;
+        }
+        Ok(())
+    }
+
+    fn sync_images(&mut self, current_ids: &[u64]) -> io::Result<Vec<u64>> {
+        use std::io::Write;
+
+        let current_set: std::collections::HashSet<u64> = current_ids.iter().copied().collect();
+        
+        // Find images we've transmitted that are no longer current
+        let stale: Vec<u64> = self.transmitted_images
+            .iter()
+            .filter(|id| !current_set.contains(id))
+            .copied()
+            .collect();
+
+        // Delete stale images
+        for id in &stale {
+            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
+            write!(self.terminal, "{}", delete_cmd)?;
+            self.transmitted_images.remove(id);
+        }
+
+        if !stale.is_empty() {
+            self.terminal.flush()?;
+        }
+
+        Ok(stale)
     }
 
     fn flush(&mut self) -> io::Result<()> {
