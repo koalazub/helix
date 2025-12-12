@@ -319,24 +319,86 @@ impl<'a> TextRenderer<'a> {
     }
 
     /// Draws raw terminal content (inline images, etc.) at the specified position.
+    ///
+    /// For Unicode placeholder images:
+    /// - The payload (transmission + placement escape sequences) is sent ONCE via raw_writes
+    /// - The placeholder text rows are written to normal cells EVERY frame
+    ///
+    /// For legacy raw content (without placeholders):
+    /// - The payload is written to raw_writes every frame (will be skipped if already transmitted)
     pub fn draw_raw_content(
         &mut self,
         raw: &helix_core::text_annotations::RawContent,
         mut position: Position,
     ) {
+        log::error!(
+            "[document.rs:draw_raw_content] id={}, position=({},{}), height={}, payload_bytes={}, offset.row={}, uses_placeholders={}",
+            raw.id, position.row, position.col, raw.height, raw.payload.len(), self.offset.row, raw.uses_placeholders()
+        );
+
         if position.row < self.offset.row {
+            log::error!("[document.rs:draw_raw_content] Skipping: position.row < offset.row");
             return;
         }
         position.row -= self.offset.row;
 
-        // Write raw bytes directly to the terminal via surface
-        // Include the ID for efficient diffing between frames
-        self.surface.write_raw_bytes(
-            raw.id,
-            self.viewport.x + position.col as u16,
-            self.viewport.y + position.row as u16,
-            &raw.payload,
+        let screen_x = self.viewport.x + position.col as u16;
+        let screen_y = self.viewport.y + position.row as u16;
+
+        log::error!(
+            "[document.rs:draw_raw_content] Writing to screen ({}, {}), viewport=({}, {}) dim={}x{}",
+            screen_x, screen_y, self.viewport.x, self.viewport.y, self.viewport.width, self.viewport.height
         );
+
+        // Skip if position is outside viewport (scrolled out of view)
+        if screen_y >= self.viewport.y + self.viewport.height {
+            log::error!(
+                "[document.rs:draw_raw_content] Skipping: screen_y={} is outside viewport (max={})",
+                screen_y, self.viewport.y + self.viewport.height - 1
+            );
+            return;
+        }
+
+        if raw.uses_placeholders() {
+            // Unicode placeholder rendering:
+            // 1. Send transmission + placement escape sequences via raw_writes (sent once)
+            self.surface.write_raw_bytes(
+                raw.id,
+                screen_x,
+                screen_y,
+                &raw.payload,
+            );
+
+            // 2. Write placeholder text rows to normal cells (rendered every frame)
+            if let Some(placeholder_rows) = &raw.placeholder_rows {
+                log::error!(
+                    "[document.rs:draw_raw_content] Writing {} placeholder rows at ({}, {})",
+                    placeholder_rows.len(), screen_x, screen_y
+                );
+                for (row_idx, row_text) in placeholder_rows.iter().enumerate() {
+                    let y = screen_y + row_idx as u16;
+                    if y < self.viewport.y + self.viewport.height {
+                        // Write placeholder text as normal styled text
+                        // The placeholder chars + foreground colour will be interpreted by the terminal
+                        self.surface.set_string(
+                            screen_x,
+                            y,
+                            row_text,
+                            Style::default(),
+                        );
+                    }
+                }
+            }
+        } else {
+            // Legacy raw content: write bytes directly to raw_writes
+            // The terminal backend will skip if already transmitted
+            self.surface.write_raw_bytes(
+                raw.id,
+                screen_x,
+                screen_y,
+                &raw.payload,
+            );
+        }
     }
 
     /// Draws a single `grapheme` at the current render position with a specified `style`.

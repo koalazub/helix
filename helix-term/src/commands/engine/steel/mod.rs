@@ -56,11 +56,13 @@ use std::{
     num::NonZeroU8,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Mutex, MutexGuard, RwLock, RwLockReadGuard, Weak,
     },
     time::{Duration, SystemTime},
 };
+
+static RAW_CONTENT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 use std::{str::FromStr as _, sync::Arc};
 
 use steel::{rvals::Custom, steel_vm::builtin::BuiltInModule};
@@ -732,6 +734,41 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
         "move-window-far-right",
         move_window_to_the_right,
         "Moves the current window to the far right"
+    );
+    function0!(
+        "commit-changes-to-history",
+        commit_changes_to_history,
+        "Commits any pending document changes to the undo history. Call this after document modifications in async callbacks to prevent selection tracking crashes."
+    );
+
+    let mut template_function_arity_3 = |name: &str, doc: &str| {
+        if generate_sources {
+            let docstring = format_docstring(doc);
+
+            builtin_static_command_module.push_str(&format!(
+                r#"
+(provide {})
+;;@doc
+{}
+(define ({} arg1 arg2 arg3)
+    (helix.static.{} *helix.cx* arg1 arg2 arg3))
+"#,
+                name, docstring, name, name
+            ));
+        }
+    };
+
+    macro_rules! function3 {
+        ($name:expr, $function:expr, $doc:expr) => {{
+            module.register_fn($name, $function);
+            template_function_arity_3($name, $doc);
+        }};
+    }
+
+    function3!(
+        "add-raw-content!",
+        add_raw_content,
+        "Add raw content (e.g., Kitty graphics escape sequences) to the current document for inline rendering. Arguments: payload (string), height (rows), char_idx (position)"
     );
 
     let mut template_function_no_context = |name: &str, doc: &str| {
@@ -5763,16 +5800,23 @@ fn configure_engine_impl(mut engine: Engine) -> Engine {
             })
     });
 
-    // RawContent functions for inline image rendering
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static RAW_CONTENT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-    // Add raw content (inline images, etc.) to the current document/view
-    // Payload is raw terminal escape sequences (e.g., Kitty graphics protocol)
+    // Add placeholder image using Unicode placeholder rendering (Kitty graphics)
+    // This is the preferred method for inline images as it works with text redraws
+    //
+    // Arguments:
+    // - transmission_payload: Escape sequences to transmit image data (sent once)
+    // - placeholder_rows: List of placeholder text strings (rendered each frame as normal text)
+    // - height: Number of rows the image occupies
+    // - width: Number of columns the image occupies
+    // - char_idx: Character position where the image should be inserted
     engine.register_fn(
-        "add-raw-content!",
-        |cx: &mut Context, payload: Vec<u8>, height: u16, char_idx: usize| {
-            use std::sync::Arc;
+        "add-placeholder-image!",
+        |cx: &mut Context,
+         transmission_payload: String,
+         placeholder_rows: steel::rvals::SteelVal,
+         height: u16,
+         width: u16,
+         char_idx: usize| {
             use helix_core::text_annotations::RawContent;
 
             let (view, _doc) = current!(cx.editor);
@@ -5782,15 +5826,47 @@ fn configure_engine_impl(mut engine: Engine) -> Engine {
             // Generate unique ID for this raw content
             let id = RAW_CONTENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
 
-            // Get mutable document and add raw content
+            // Convert transmission payload string to bytes
+            let payload_bytes = transmission_payload.into_bytes();
+
+            // Convert placeholder_rows from Steel list to Vec<String>
+            let rows: Vec<String> = match placeholder_rows {
+                steel::rvals::SteelVal::ListV(list) => {
+                    list.iter()
+                        .filter_map(|v| {
+                            if let steel::rvals::SteelVal::StringV(s) = v {
+                                Some(s.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                }
+                _ => {
+                    log::error!("[add-placeholder-image!] placeholder_rows must be a list of strings");
+                    return;
+                }
+            };
+
+            log::error!(
+                "[add-placeholder-image!] id={}, view_id={:?}, doc_id={:?}, char_idx={}, height={}, width={}, rows={}",
+                id, view_id, doc_id, char_idx, height, width, rows.len()
+            );
+
+            // Get mutable document and add raw content with placeholders
             if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
-                let content = RawContent {
-                    id,
-                    payload: Arc::new(payload),
-                    height,
+                let content = RawContent::with_placeholders(
                     char_idx,
-                };
+                    id,
+                    payload_bytes,
+                    height,
+                    width,
+                    rows,
+                );
                 doc.add_raw_content(view_id, content);
+                log::error!("[add-placeholder-image!] Successfully added placeholder image to document");
+            } else {
+                log::error!("[add-placeholder-image!] Document not found for doc_id={:?}", doc_id);
             }
         },
     );
@@ -7061,4 +7137,41 @@ pub fn insert_string(cx: &mut Context, string: SteelString) {
         indent,
     );
     doc.apply(&transaction, view.id);
+}
+
+/// Commit any pending document changes to the undo history.
+/// This must be called after document modifications in async callbacks
+/// to prevent selection tracking crashes when EditorView::handle_event
+/// tries to commit stale changes.
+pub fn commit_changes_to_history(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+    doc.append_changes_to_history(view);
+}
+
+/// Add raw content (inline images, etc.) to the current document/view
+/// Payload is raw terminal escape sequences (e.g., Kitty graphics protocol)
+pub fn add_raw_content(cx: &mut Context, payload: String, height: u16, char_idx: usize) {
+    use helix_core::text_annotations::RawContent;
+
+    let (view, _doc) = current!(cx.editor);
+    let view_id = view.id;
+    let doc_id = view.doc;
+
+    let id = RAW_CONTENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+    let payload_len = payload.len();
+    let payload_bytes = payload.into_bytes();
+
+    log::error!(
+        "[add-raw-content!] id={}, view_id={:?}, doc_id={:?}, char_idx={}, height={}, payload_bytes={}",
+        id, view_id, doc_id, char_idx, height, payload_len
+    );
+
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        let content = RawContent::new(char_idx, id, payload_bytes, height);
+        doc.add_raw_content(view_id, content);
+        log::error!("[add-raw-content!] Successfully added to document");
+    } else {
+        log::error!("[add-raw-content!] Document not found for doc_id={:?}", doc_id);
+    }
 }

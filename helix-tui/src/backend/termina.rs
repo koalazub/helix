@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::{self, Write as _};
 
 use helix_view::{
@@ -76,6 +77,8 @@ pub struct TerminaBackend {
     capabilities: Capabilities,
     reset_cursor_command: String,
     is_synchronized_output_set: bool,
+    /// Track which Kitty graphics image IDs have been transmitted to avoid re-sending
+    transmitted_images: HashSet<u64>,
 }
 
 impl TerminaBackend {
@@ -112,6 +115,7 @@ impl TerminaBackend {
             capabilities,
             reset_cursor_command,
             is_synchronized_output_set: false,
+            transmitted_images: HashSet::new(),
         })
     }
 
@@ -372,6 +376,7 @@ impl TerminaBackend {
         }
         Ok(())
     }
+
 }
 
 impl Backend for TerminaBackend {
@@ -561,9 +566,19 @@ impl Backend for TerminaBackend {
 
     fn draw_raw(&mut self, content: &[(u64, u16, u16, Vec<u8>)]) -> io::Result<()> {
         use std::io::Write;
-        for (_id, x, y, bytes) in content {
-            write!(self.terminal, "\x1b[{};{}H", y + 1, x + 1)?;
+
+        for (id, x, y, bytes) in content {
+            // Delete any existing image with this ID before redrawing
+            // Kitty protocol: a=d (delete), d=I (by ID), i=<id>, q=2 (quiet)
+            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
+            write!(self.terminal, "{}", delete_cmd)?;
+
+            // Move cursor to position and transmit image with a=T (transmit AND display)
+            let cursor_cmd = format!("\x1b[{};{}H", y + 1, x + 1);
+            write!(self.terminal, "{}", cursor_cmd)?;
             self.terminal.write_all(bytes)?;
+            self.terminal.flush()?;
+            self.transmitted_images.insert(*id);
         }
         Ok(())
     }

@@ -300,7 +300,15 @@ impl Buffer {
     /// Write raw terminal bytes at the given position (for inline images, etc.)
     /// The id is used for efficient diffing - only content with new IDs is sent to terminal.
     pub fn write_raw_bytes(&mut self, id: u64, x: u16, y: u16, bytes: &[u8]) {
+        log::error!(
+            "[buffer.rs:write_raw_bytes] id={}, pos=({},{}), bytes={}",
+            id, x, y, bytes.len()
+        );
         self.raw_writes.push((id, x, y, bytes.to_vec()));
+        log::error!(
+            "[buffer.rs:write_raw_bytes] raw_writes now has {} items",
+            self.raw_writes.len()
+        );
     }
 
     /// Print a string, starting at the position (x, y)

@@ -154,26 +154,16 @@ where
         let updates = previous_buffer.diff(current_buffer);
         self.backend.draw(updates.into_iter())?;
 
-        // Draw raw content (inline images, etc.) - only send new content
-        // Use ID-based diffing: only send raw writes with IDs not in previous frame
+        // Draw raw content (inline images, etc.)
+        // Raw content must be re-sent each frame because text redraws overwrite images.
+        // The terminal doesn't persist images across redraws - they're escape sequences
+        // that render at a specific cursor position, and get overwritten by subsequent text.
         if !current_buffer.raw_writes.is_empty() {
-            use std::collections::HashSet;
-            let previous_ids: HashSet<u64> = previous_buffer
-                .raw_writes
-                .iter()
-                .map(|(id, _, _, _)| *id)
-                .collect();
-
-            let new_writes: Vec<_> = current_buffer
-                .raw_writes
-                .iter()
-                .filter(|(id, _, _, _)| !previous_ids.contains(id))
-                .cloned()
-                .collect();
-
-            if !new_writes.is_empty() {
-                self.backend.draw_raw(&new_writes)?;
-            }
+            log::error!(
+                "[terminal.rs:flush] Sending {} raw_writes",
+                current_buffer.raw_writes.len()
+            );
+            self.backend.draw_raw(&current_buffer.raw_writes)?;
         }
 
         Ok(())
