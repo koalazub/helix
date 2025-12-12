@@ -354,6 +354,16 @@ impl<'a> TextRenderer<'a> {
             return;
         }
 
+        // Check if image would extend beyond viewport bottom
+        let viewport_bottom = self.viewport.y + self.viewport.height;
+        let image_bottom = screen_y + raw.height;
+        if image_bottom > viewport_bottom {
+            // Image extends past viewport - don't render to avoid spillover
+            // TODO: Could clip image rows instead of hiding entirely
+            self.surface.delete_raw_image(raw.id);
+            return;
+        }
+
         if raw.uses_placeholders() {
             // Unicode placeholder rendering:
             // 1. Send transmission + placement escape sequences via raw_writes (sent once)
