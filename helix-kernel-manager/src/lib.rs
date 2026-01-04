@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 /// Kernel process information
@@ -45,7 +44,7 @@ impl KernelManager {
         let input_file = self.kernel_dir.join("input.jl");
         let output_file = self.kernel_dir.join("output.txt");
         let runner_file = self.kernel_dir.join("runner.jl");
-        let log_file = self.kernel_dir.join("kernel.log");
+        let _log_file = self.kernel_dir.join("kernel.log");
 
         // Write runner script
         let runner_script = self.create_runner_script(&input_file, &output_file)?;
