@@ -43,6 +43,7 @@ enum TagKind {
     Interface,
     Macro,
     Module,
+    Section,
     Struct,
     Type,
 }
@@ -56,6 +57,7 @@ impl TagKind {
             Self::Interface => "interface",
             Self::Macro => "macro",
             Self::Module => "module",
+            Self::Section => "section",
             Self::Struct => "struct",
             Self::Type => "type",
         }
@@ -69,6 +71,7 @@ impl TagKind {
             "interface" => Some(TagKind::Interface),
             "macro" => Some(TagKind::Macro),
             "module" => Some(TagKind::Module),
+            "section" => Some(TagKind::Section),
             "struct" => Some(TagKind::Struct),
             "type" => Some(TagKind::Type),
             _ => None,
@@ -335,11 +338,9 @@ pub fn syntax_workspace_symbol_picker(cx: &mut Context) {
                         Ok(entry) => entry,
                         Err(_) => return WalkState::Continue,
                     };
-                    match entry.file_type() {
-                        Some(entry) if entry.is_file() => {}
-                        // skip everything else
-                        _ => return WalkState::Continue,
-                    };
+                    if !entry.path().is_file() {
+                        return WalkState::Continue;
+                    }
                     let path = entry.path();
                     // If this document is open, skip it because we've already processed it above.
                     if documents.contains(path) {
@@ -428,6 +429,7 @@ pub fn syntax_workspace_symbol_picker(cx: &mut Context) {
             Some((tag.start_line, tag.end_line)),
         ))
     })
+    .with_history_register(Some(reg))
     .truncate_start(false);
     cx.push_layer(Box::new(overlaid(picker)));
 }

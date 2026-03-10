@@ -3768,11 +3768,11 @@ impl HelixConfiguration {
 
                 if !patterns.is_empty() {
                     let mut builder = globset::GlobSetBuilder::new();
-                    for pattern in patterns {
-                        let glob = globset::Glob::new(&pattern)?;
+                    for pattern in &patterns {
+                        let glob = globset::Glob::new(pattern)?;
                         builder.add(glob);
                     }
-                    config.required_root_patterns = Some(builder.build()?);
+                    config.required_root_patterns = Some(helix_core::syntax::config::GlobSet::from_inner(builder.build()?, patterns));
                 }
             }
         } else {
@@ -3813,11 +3813,11 @@ impl HelixConfiguration {
 
                 if !patterns.is_empty() {
                     let mut builder = globset::GlobSetBuilder::new();
-                    for pattern in patterns {
-                        let glob = globset::Glob::new(&pattern)?;
+                    for pattern in &patterns {
+                        let glob = globset::Glob::new(pattern)?;
                         builder.add(glob);
                     }
-                    config.required_root_patterns = Some(builder.build()?);
+                    config.required_root_patterns = Some(helix_core::syntax::config::GlobSet::from_inner(builder.build()?, patterns));
                 }
             }
 

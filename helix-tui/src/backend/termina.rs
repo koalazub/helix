@@ -218,8 +218,7 @@ impl TerminaBackend {
 
         capabilities.extended_underlines |= config.force_enable_extended_underlines;
 
-        let mut reset_cursor_command =
-            Csi::Cursor(csi::Cursor::CursorStyle(CursorStyle::Default)).to_string();
+        let mut reset_cursor_command = String::new();
         if let Ok(t) = termini::TermInfo::from_env() {
             capabilities.extended_underlines |= t.extended_cap("Smulx").is_some()
                 || t.extended_cap("Su").is_some()
@@ -241,6 +240,8 @@ impl TerminaBackend {
         } else {
             log::debug!("terminfo could not be read, using default cursor reset escape sequence: {reset_cursor_command:?}");
         }
+        reset_cursor_command
+            .push_str(&Csi::Cursor(csi::Cursor::CursorStyle(CursorStyle::Default)).to_string());
 
         terminal.enter_cooked_mode()?;
 
@@ -665,8 +666,11 @@ fn diff_modifiers(from: Modifier, to: Modifier) -> SgrModifiers {
     if removed.contains(Modifier::REVERSED) {
         modifiers |= SgrModifiers::NO_REVERSE;
     }
-    if removed.contains(Modifier::BOLD) && !to.contains(Modifier::DIM) {
+    if removed.contains(Modifier::BOLD) {
         modifiers |= SgrModifiers::INTENSITY_NORMAL;
+        if to.contains(Modifier::DIM) {
+            modifiers |= SgrModifiers::INTENSITY_DIM
+        }
     }
     if removed.contains(Modifier::DIM) {
         modifiers |= SgrModifiers::INTENSITY_NORMAL;
