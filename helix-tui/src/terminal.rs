@@ -194,9 +194,43 @@ where
             })
             .collect();
 
+        if !current_buffer.raw_writes.is_empty() || !prev_images.is_empty() {
+            log::error!(
+                "[terminal.flush] raw_writes={}, prev_images={}, to_draw={}, to_delete={}",
+                current_buffer.raw_writes.len(),
+                prev_images.len(),
+                to_draw.len(),
+                to_delete.len()
+            );
+            for (id, x, y, bytes) in &current_buffer.raw_writes {
+                log::error!(
+                    "[terminal.flush]   current: id={}, pos=({},{}), bytes={}",
+                    id,
+                    x,
+                    y,
+                    bytes.len()
+                );
+            }
+            for (id, x, y, bytes) in to_draw.iter() {
+                log::error!(
+                    "[terminal.flush]   to_draw: id={}, pos=({},{}), bytes={}",
+                    id,
+                    x,
+                    y,
+                    bytes.len()
+                );
+            }
+        }
+
         if !to_delete.is_empty() {
             self.backend.delete_images(&to_delete)?;
         }
+
+        // Begin synchronized output frame — all writes between begin_frame()
+        // and end_frame() are batched by the terminal and presented atomically.
+        // This ensures raw image data (draw_raw) is rendered in the same frame
+        // as the cell updates (draw), preventing flicker and missed images.
+        self.backend.begin_frame()?;
 
         let updates = previous_buffer.diff(current_buffer);
         self.backend.draw(updates.into_iter())?;
@@ -208,6 +242,8 @@ where
                 .collect();
             self.backend.draw_raw(&draw_data)?;
         }
+
+        self.backend.end_frame()?;
 
         Ok(())
     }

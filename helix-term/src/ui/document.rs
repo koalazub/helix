@@ -331,7 +331,20 @@ impl<'a> TextRenderer<'a> {
         raw: &helix_core::text_annotations::RawContent,
         mut position: Position,
     ) {
+        log::error!(
+            "[draw_raw_content] id={}, pos=({},{}), offset=({},{}), viewport=({},{},{},{}), height={}",
+            raw.id, position.row, position.col,
+            self.offset.row, self.offset.col,
+            self.viewport.x, self.viewport.y, self.viewport.width, self.viewport.height,
+            raw.height
+        );
+
         if position.row < self.offset.row {
+            log::error!(
+                "[draw_raw_content] SKIPPED: position.row({}) < offset.row({})",
+                position.row,
+                self.offset.row
+            );
             self.surface.delete_raw_image(raw.id);
             return;
         }
@@ -354,18 +367,21 @@ impl<'a> TextRenderer<'a> {
         }
 
         if raw.uses_placeholders() {
-            self.surface.write_raw_bytes(raw.id, screen_x, screen_y, &raw.payload);
+            self.surface
+                .write_raw_bytes(raw.id, screen_x, screen_y, &raw.payload);
 
             if let Some(placeholder_rows) = &raw.placeholder_rows {
                 for (row_idx, row_text) in placeholder_rows.iter().enumerate() {
                     let y = screen_y + row_idx as u16;
                     if y < viewport_bottom {
-                        self.surface.set_string(screen_x, y, row_text, Style::default());
+                        self.surface
+                            .set_string(screen_x, y, row_text, Style::default());
                     }
                 }
             }
         } else {
-            self.surface.write_raw_bytes(raw.id, screen_x, screen_y, &raw.payload);
+            self.surface
+                .write_raw_bytes(raw.id, screen_x, screen_y, &raw.payload);
         }
     }
 

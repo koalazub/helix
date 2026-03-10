@@ -291,20 +291,10 @@ where
     }
 
     fn draw_raw(&mut self, content: &[(u64, u16, u16, Vec<u8>)]) -> io::Result<()> {
-        log::error!(
-            "[crossterm.rs:draw_raw] Writing {} raw content items",
-            content.len()
-        );
-        for (id, x, y, bytes) in content {
-            log::error!(
-                "[crossterm.rs:draw_raw] id={}, MoveTo({},{}), bytes={}, first_bytes={:?}",
-                id, x, y, bytes.len(),
-                &bytes[..std::cmp::min(50, bytes.len())]
-            );
+        for (_id, x, y, bytes) in content {
             queue!(self.buffer, MoveTo(*x, *y))?;
             self.buffer.write_all(bytes)?;
         }
-        log::error!("[crossterm.rs:draw_raw] Completed writing raw bytes");
         Ok(())
     }
 
