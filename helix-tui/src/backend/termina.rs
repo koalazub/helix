@@ -377,7 +377,6 @@ impl TerminaBackend {
         }
         Ok(())
     }
-
 }
 
 impl Backend for TerminaBackend {
@@ -430,12 +429,18 @@ impl Backend for TerminaBackend {
         Ok(())
     }
 
+    fn begin_frame(&mut self) -> io::Result<()> {
+        self.start_synchronized_render()
+    }
+
+    fn end_frame(&mut self) -> io::Result<()> {
+        self.end_sychronized_render()
+    }
+
     fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
-        self.start_synchronized_render()?;
-
         let mut fg = Color::Reset;
         let mut bg = Color::Reset;
         let mut underline_color = Color::Reset;
@@ -512,8 +517,6 @@ impl Backend for TerminaBackend {
         }
 
         write!(self.terminal, "{}", Csi::Sgr(csi::Sgr::Reset))?;
-
-        self.end_sychronized_render()?;
 
         Ok(())
     }

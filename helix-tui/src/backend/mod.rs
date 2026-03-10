@@ -63,6 +63,15 @@ pub trait Backend {
     fn clear(&mut self) -> Result<(), io::Error>;
     /// Gets the size of the terminal in cells
     fn size(&self) -> Result<Rect, io::Error>;
+    /// Begins a synchronized output frame.  Terminals that support
+    /// synchronized output will batch all writes until `end_frame` is called.
+    fn begin_frame(&mut self) -> Result<(), io::Error> {
+        Ok(())
+    }
+    /// Ends a synchronized output frame, causing the terminal to present.
+    fn end_frame(&mut self) -> Result<(), io::Error> {
+        Ok(())
+    }
     /// Flushes the terminal buffer
     fn flush(&mut self) -> Result<(), io::Error>;
     fn supports_true_color(&self) -> bool;
