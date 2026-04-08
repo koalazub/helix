@@ -150,6 +150,9 @@ pub struct Document {
     /// To know if they're up-to-date, check the `id` field in `DocumentInlayHints`.
     pub(crate) inlay_hints: HashMap<ViewId, DocumentInlayHints>,
     pub(crate) jump_labels: HashMap<ViewId, Vec<Overlay>>,
+    /// Plugin-managed overlays for text concealment (e.g., LaTeX symbol rendering).
+    /// Unlike jump_labels which are transient, these persist until explicitly cleared.
+    pub plugin_overlays: HashMap<ViewId, Vec<Overlay>>,
     /// Set to `true` when the document is updated, reset to `false` on the next inlay hints
     /// update from the LSP
     pub inlay_hints_oudated: bool,
@@ -737,6 +740,7 @@ impl Document {
             name: None,
             readonly: false,
             jump_labels: HashMap::new(),
+            plugin_overlays: HashMap::new(),
             raw_content: HashMap::new(),
             color_swatches: None,
             color_swatch_controller: TaskController::new(),
@@ -1396,6 +1400,7 @@ impl Document {
         self.selections.remove(&view_id);
         self.inlay_hints.remove(&view_id);
         self.jump_labels.remove(&view_id);
+        self.plugin_overlays.remove(&view_id);
     }
 
     /// Apply a [`Transaction`] to the [`Document`] to change its text.
@@ -2330,6 +2335,14 @@ impl Document {
 
     pub fn remove_jump_labels(&mut self, view_id: ViewId) {
         self.jump_labels.remove(&view_id);
+    }
+
+    pub fn set_plugin_overlays(&mut self, view_id: ViewId, overlays: Vec<Overlay>) {
+        self.plugin_overlays.insert(view_id, overlays);
+    }
+
+    pub fn clear_plugin_overlays(&mut self, view_id: ViewId) {
+        self.plugin_overlays.remove(&view_id);
     }
 
     pub fn add_raw_content(

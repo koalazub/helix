@@ -5218,6 +5218,32 @@ callback : (-> any?)
 
     module.register_fn("send-lsp-command", send_arbitrary_lsp_command);
     module.register_fn("send-lsp-notification", send_arbitrary_lsp_notification);
+    module.register_fn("set-overlays!", set_plugin_overlays);
+    module.register_fn("clear-overlays!", clear_plugin_overlays);
+    if generate_sources {
+        builtin_misc_module.push_str(
+            r#"
+    (provide set-overlays!)
+    ;;@doc
+    ;; Set text overlays for the current view. Each overlay replaces a single
+    ;; grapheme at the given char index with a replacement string.
+    ;; Use "" to hide a grapheme. Does not modify the buffer.
+    (define (set-overlays! overlays)
+        (helix.set-overlays! *helix.cx* overlays))
+            "#,
+        );
+    }
+    if generate_sources {
+        builtin_misc_module.push_str(
+            r#"
+    (provide clear-overlays!)
+    ;;@doc
+    ;; Clear all plugin-managed text overlays for the current view.
+    (define (clear-overlays!)
+        (helix.clear-overlays! *helix.cx*))
+            "#,
+        );
+    }
     if generate_sources {
         builtin_misc_module.push_str(
             r#"
@@ -7155,6 +7181,53 @@ pub fn remove_inlay_hint(cx: &mut Context, char_index: usize, _completion: Steel
         .retain(|x| x.char_idx != char_index);
     doc.set_inlay_hints(view_id, new_inlay_hints);
     true
+}
+
+pub fn set_plugin_overlays(cx: &mut Context, overlay_list: steel::rvals::SteelVal) {
+    use helix_core::text_annotations::Overlay;
+
+    let view_id = cx.editor.tree.focus;
+    if !cx.editor.tree.contains(view_id) {
+        return;
+    }
+    let doc_id = cx.editor.tree.get(view_id).doc;
+    let doc = match cx.editor.documents.get_mut(&doc_id) {
+        Some(d) => d,
+        None => return,
+    };
+
+    let mut overlays = Vec::new();
+
+    // overlay_list is a list of (char-index . replacement-string) pairs
+    if let steel::rvals::SteelVal::ListV(pairs) = overlay_list {
+        for pair in pairs.iter() {
+            if let steel::rvals::SteelVal::Pair(p) = pair {
+                let char_idx = match p.car() {
+                    steel::rvals::SteelVal::IntV(i) => i as usize,
+                    _ => continue,
+                };
+                let grapheme = match p.cdr() {
+                    steel::rvals::SteelVal::StringV(s) => s.to_string(),
+                    _ => continue,
+                };
+                overlays.push(Overlay::new(char_idx, grapheme));
+            }
+        }
+    }
+
+    overlays.sort_by_key(|o| o.char_idx);
+    doc.set_plugin_overlays(view_id, overlays);
+}
+
+pub fn clear_plugin_overlays(cx: &mut Context) {
+    let view_id = cx.editor.tree.focus;
+    if !cx.editor.tree.contains(view_id) {
+        return;
+    }
+    let doc_id = cx.editor.tree.get(view_id).doc;
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        doc.clear_plugin_overlays(view_id);
+    }
 }
 
 pub fn insert_string(cx: &mut Context, string: SteelString) {
