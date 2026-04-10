@@ -1552,6 +1552,92 @@ impl Document {
             apply_inlay_hint_changes(padding_after_inlay_hints);
         }
 
+        // Update raw content positions the same way we update diagnostics
+        // and inlay hints above. Without this step any inline image
+        // registered by a plugin stays pinned to whatever char offset it
+        // was created at, so every subsequent buffer mutation drifts the
+        // image away from the cell it belongs to — that's how the
+        // notebook plugin's "images pinned above the wrong cell /
+        // ghosted after scroll" bugs originate. `Assoc::After` keeps the
+        // image anchored to the character that used to follow it, which
+        // is the correct behaviour for content that was placed *before*
+        // that character.
+        //
+        // Three guard rails around `update_positions`:
+        //
+        //   1. Pre-filter entries whose char_idx is past the OLD document
+        //      length. `update_positions` panics on positions it can't
+        //      consume from the change set, and plugins don't always
+        //      maintain the invariant that positions stay in range — a
+        //      buggy plugin can leave us with dangling entries from a
+        //      session where the document shrank.
+        //   2. Pre-sort before the remap. `update_positions` accepts
+        //      unsorted iterators (it walks backwards through changes to
+        //      recover), but the cost is O(MN) in the worst case, and
+        //      the Layer iterator in text_annotations::Layer absolutely
+        //      requires a sorted slice for `partition_point` to be
+        //      correct. Sorting once up-front makes both happy.
+        //   3. Post-retain entries that landed at/past the NEW document
+        //      length, and re-sort — remapping can change the relative
+        //      order of entries that straddled a delete.
+        let old_len = old_doc.len_chars();
+        let new_len = self.text.len_chars();
+        for (view_id, raw_contents) in self.raw_content.iter_mut() {
+            if raw_contents.is_empty() {
+                continue;
+            }
+            // (1) drop anything whose pre-transaction char_idx was out of
+            // bounds — update_positions would panic on it.
+            let pre_filter = raw_contents.len();
+            raw_contents.retain(|rc| rc.char_idx <= old_len);
+            let dropped_pre = pre_filter - raw_contents.len();
+
+            // (2) ensure sorted by char_idx before the remap.
+            raw_contents.sort_by_key(|rc| rc.char_idx);
+
+            let before_positions: Vec<(u64, usize)> = if log::log_enabled!(log::Level::Debug) {
+                raw_contents
+                    .iter()
+                    .map(|rc| (rc.id, rc.char_idx))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            changes.update_positions(
+                raw_contents
+                    .iter_mut()
+                    .map(|rc| (&mut rc.char_idx, Assoc::After)),
+            );
+
+            // (3) post-filter + re-sort.
+            let mid = raw_contents.len();
+            raw_contents.retain(|rc| rc.char_idx <= new_len);
+            let dropped_post = mid - raw_contents.len();
+            raw_contents.sort_by_key(|rc| rc.char_idx);
+
+            if log::log_enabled!(log::Level::Debug) {
+                let after_positions: std::collections::HashMap<u64, usize> = raw_contents
+                    .iter()
+                    .map(|rc| (rc.id, rc.char_idx))
+                    .collect();
+                let mut moved = 0;
+                for (id, before_idx) in &before_positions {
+                    if let Some(after_idx) = after_positions.get(id) {
+                        if after_idx != before_idx {
+                            moved += 1;
+                        }
+                    }
+                }
+                log::debug!(
+                    "raw_content.remap: view={view_id:?} \
+                     pre_dropped={dropped_pre} moved={moved} post_dropped={dropped_post} \
+                     final={}",
+                    raw_contents.len()
+                );
+            }
+        }
+
         helix_event::dispatch(DocumentDidChange {
             doc: self,
             view: view_id,
@@ -2350,22 +2436,82 @@ impl Document {
         view_id: ViewId,
         content: helix_core::text_annotations::RawContent,
     ) {
-        self.raw_content
-            .entry(view_id)
-            .or_insert_with(Vec::new)
-            .push(content);
+        log::debug!(
+            "raw_content.add: view={view_id:?} id={} char_idx={} height={}",
+            content.id,
+            content.char_idx,
+            content.height
+        );
+        let entry = self.raw_content.entry(view_id).or_insert_with(Vec::new);
+        entry.push(content);
+        // Preserve the sort-by-char_idx invariant the layer iterator relies on.
+        entry.sort_by_key(|rc| rc.char_idx);
+    }
+
+    /// Add raw content, replacing any existing entry that shares the same
+    /// `id` with the incoming `content`. This is the idempotent variant —
+    /// safe to call repeatedly without accumulating duplicate inline
+    /// images even when the buffer has been edited between calls.
+    ///
+    /// We deliberately match on `id` alone, not on `(id, char_idx)`. The
+    /// cell-execution workflow in Nothelix re-registers an image for the
+    /// same cell on every re-run, and between runs the transaction chain
+    /// (delete old output → insert new output) walks `apply_impl`'s
+    /// position-remap loop, which moves the old entry's `char_idx` by
+    /// some amount that depends on how many bytes were deleted vs
+    /// inserted. Matching on `(id, char_idx)` lets the old entry survive
+    /// at its remapped position because the new `char_idx` is usually a
+    /// few bytes off — you end up with two entries for the same cell at
+    /// drifting positions and the renderer paints both of them, which
+    /// manifests as doubled "Matrix C" titles stacked on top of each
+    /// other. Matching on `id` alone is the semantic the cell workflow
+    /// actually wants: "this cell has ONE image, replace whatever was
+    /// there for it before".
+    ///
+    /// Also retains the `sorted-by-char_idx` invariant that the layer
+    /// iterator in `text_annotations::Layer` relies on: its
+    /// `partition_point` and `consume` are only correct when the
+    /// annotations slice is sorted.
+    pub fn add_or_replace_raw_content(
+        &mut self,
+        view_id: ViewId,
+        content: helix_core::text_annotations::RawContent,
+    ) {
+        let entry = self.raw_content.entry(view_id).or_insert_with(Vec::new);
+        let before = entry.len();
+        let new_id = content.id;
+        entry.retain(|rc| rc.id != new_id);
+        let removed = before - entry.len();
+        let char_idx = content.char_idx;
+        entry.push(content);
+        entry.sort_by_key(|rc| rc.char_idx);
+        log::debug!(
+            "raw_content.add_or_replace: view={view_id:?} id={new_id} char_idx={char_idx} \
+             replaced={removed} total={}",
+            entry.len()
+        );
     }
 
     pub fn set_raw_content(
         &mut self,
         view_id: ViewId,
-        content: Vec<helix_core::text_annotations::RawContent>,
+        mut content: Vec<helix_core::text_annotations::RawContent>,
     ) {
+        content.sort_by_key(|rc| rc.char_idx);
+        log::debug!(
+            "raw_content.set: view={view_id:?} entries={}",
+            content.len()
+        );
         self.raw_content.insert(view_id, content);
     }
 
     pub fn clear_raw_content(&mut self, view_id: ViewId) {
-        self.raw_content.remove(&view_id);
+        let removed = self
+            .raw_content
+            .remove(&view_id)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        log::debug!("raw_content.clear: view={view_id:?} removed={removed}");
     }
 
     /// Get the inlay hints for this document and `view_id`.

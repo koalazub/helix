@@ -450,12 +450,20 @@ impl<'t> Iterator for DocumentFormatter<'t> {
             self.advance_grapheme(self.visual_pos.col, self.char_pos)?
         };
 
-        // Check for raw content at this position
+        // Check for raw content at this position.
+        //
+        // This runs once per grapheme per frame for every visible char —
+        // only trace-level logging is safe here. Enable with
+        // `RUST_LOG=helix_core::doc_formatter=trace` when tracking down
+        // why an image isn't rendering at the char you expect it to.
         let raw_content = self.annotations.raw_content_at(self.char_pos);
         if let Some(raw) = raw_content {
-            log::error!(
-                "[doc_formatter] raw_content_at(char_pos={}) -> id={}, height={}, payload_bytes={}",
-                self.char_pos, raw.id, raw.height, raw.payload.len()
+            log::trace!(
+                "doc_formatter: raw_content hit at char_pos={} id={} height={} bytes={}",
+                self.char_pos,
+                raw.id,
+                raw.height,
+                raw.payload.len()
             );
         }
 

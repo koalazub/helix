@@ -331,17 +331,29 @@ impl<'a> TextRenderer<'a> {
         raw: &helix_core::text_annotations::RawContent,
         mut position: Position,
     ) {
-        log::error!(
-            "[draw_raw_content] id={}, pos=({},{}), offset=({},{}), viewport=({},{},{},{}), height={}",
-            raw.id, position.row, position.col,
-            self.offset.row, self.offset.col,
-            self.viewport.x, self.viewport.y, self.viewport.width, self.viewport.height,
+        // `trace` (not `debug` or `error`) — draw_raw_content runs once
+        // per image per frame, which is far too chatty for anything
+        // louder than trace-level logging. Enable with
+        // `RUST_LOG=helix_term::ui::document=trace`.
+        log::trace!(
+            "draw_raw_content: id={} buf_pos=({},{}) offset=({},{}) \
+             viewport=({},{},{},{}) height={}",
+            raw.id,
+            position.row,
+            position.col,
+            self.offset.row,
+            self.offset.col,
+            self.viewport.x,
+            self.viewport.y,
+            self.viewport.width,
+            self.viewport.height,
             raw.height
         );
 
         if position.row < self.offset.row {
-            log::error!(
-                "[draw_raw_content] SKIPPED: position.row({}) < offset.row({})",
+            log::trace!(
+                "draw_raw_content: id={} above viewport (row {} < offset {}), deleting",
+                raw.id,
                 position.row,
                 self.offset.row
             );
@@ -356,15 +368,35 @@ impl<'a> TextRenderer<'a> {
         if screen_x >= self.viewport.x + self.viewport.width
             || screen_y >= self.viewport.y + self.viewport.height
         {
+            log::trace!(
+                "draw_raw_content: id={} off-viewport screen=({},{}), deleting",
+                raw.id,
+                screen_x,
+                screen_y
+            );
             self.surface.delete_raw_image(raw.id);
             return;
         }
 
         let viewport_bottom = self.viewport.y + self.viewport.height;
         if screen_y + raw.height > viewport_bottom {
+            log::trace!(
+                "draw_raw_content: id={} bottom clipped (screen_y={} + height={} > {}), deleting",
+                raw.id,
+                screen_y,
+                raw.height,
+                viewport_bottom
+            );
             self.surface.delete_raw_image(raw.id);
             return;
         }
+
+        log::trace!(
+            "draw_raw_content: id={} drawing at screen=({},{})",
+            raw.id,
+            screen_x,
+            screen_y
+        );
 
         if raw.uses_placeholders() {
             self.surface

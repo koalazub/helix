@@ -170,12 +170,30 @@ where
             .map(|(id, x, y, _)| (*id, (*x, *y)))
             .collect();
 
+        // Decide which raw images need to be flushed out of the terminal
+        // on this frame. Three disjoint cases produce a delete:
+        //
+        //   1. The image is present in both frames but its position
+        //      changed (scroll, buffer edit, window resize). We have to
+        //      erase the old pixels or Kitty leaves them behind.
+        //   2. The image was in the previous frame but is entirely gone
+        //      in the current frame. This happens whenever an image
+        //      scrolls out of view — Helix's document formatter never
+        //      reaches that char index during the traversal, so it
+        //      never calls `delete_raw_image` for it, and without an
+        //      explicit delete here the pixels pin themselves to their
+        //      last terminal position and show through subsequent
+        //      scrolls as a ghost image. That was the original
+        //      "pinned inline plot" bug.
+        //   3. Any image id queued by `delete_raw_image` during the
+        //      frame (for example the off-viewport guard in
+        //      ui/document.rs) that isn't already on the list.
         let mut to_delete: Vec<u64> = Vec::new();
         for (id, (px, py)) in &prev_images {
-            if let Some((cx, cy)) = curr_images.get(id) {
-                if cx != px || cy != py {
-                    to_delete.push(*id);
-                }
+            match curr_images.get(id) {
+                Some((cx, cy)) if cx != px || cy != py => to_delete.push(*id),
+                Some(_) => {}
+                None => to_delete.push(*id),
             }
         }
 
@@ -193,34 +211,6 @@ where
                 Some((px, py)) => x != px || y != py,
             })
             .collect();
-
-        if !current_buffer.raw_writes.is_empty() || !prev_images.is_empty() {
-            log::error!(
-                "[terminal.flush] raw_writes={}, prev_images={}, to_draw={}, to_delete={}",
-                current_buffer.raw_writes.len(),
-                prev_images.len(),
-                to_draw.len(),
-                to_delete.len()
-            );
-            for (id, x, y, bytes) in &current_buffer.raw_writes {
-                log::error!(
-                    "[terminal.flush]   current: id={}, pos=({},{}), bytes={}",
-                    id,
-                    x,
-                    y,
-                    bytes.len()
-                );
-            }
-            for (id, x, y, bytes) in to_draw.iter() {
-                log::error!(
-                    "[terminal.flush]   to_draw: id={}, pos=({},{}), bytes={}",
-                    id,
-                    x,
-                    y,
-                    bytes.len()
-                );
-            }
-        }
 
         if !to_delete.is_empty() {
             self.backend.delete_images(&to_delete)?;

@@ -768,8 +768,23 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
     function4!(
         "add-raw-content!",
         add_raw_content,
-        "Add raw content (e.g., Kitty graphics escape sequences) to the current document for inline rendering. Arguments: payload (string), image_id (kitty image id), height (rows), char_idx (position)"
+        "Add raw content (e.g., Kitty graphics escape sequences) to the current document for inline rendering. Arguments: payload (string), image_id (kitty image id), height (rows), char_idx (position). Idempotent on (image_id, char_idx): an existing entry is replaced in place."
     );
+
+    module.register_fn("clear-raw-content!", clear_raw_content);
+    if generate_sources {
+        builtin_static_command_module.push_str(
+            r#"
+(provide clear-raw-content!)
+;;@doc
+;; Remove all raw content (inline images) from the current view. Call this
+;; before bulk re-registration to prevent stale entries accumulating with
+;; fresh image ids.
+(define (clear-raw-content!)
+    (helix.static.clear-raw-content! *helix.cx*))
+            "#,
+        );
+    }
 
     let mut template_function_arity_5 = |name: &str, doc: &str| {
         if generate_sources {
@@ -7251,9 +7266,16 @@ pub fn commit_changes_to_history(cx: &mut Context) {
     doc.append_changes_to_history(view);
 }
 
-/// Add raw content (inline images, etc.) to the current document/view
-/// Payload is raw terminal escape sequences (e.g., Kitty graphics protocol)
-/// The image_id must match the ID embedded in the Kitty escape sequence for proper deletion.
+/// Add raw content (inline images, etc.) to the current document/view.
+/// Payload is raw terminal escape sequences (e.g., Kitty graphics protocol).
+/// The image_id must match the ID embedded in the Kitty escape sequence for
+/// proper deletion.
+///
+/// Idempotent on `(image_id, char_idx)`: if an entry already exists with the
+/// same id and char offset, it is replaced in place rather than appended.
+/// This prevents duplicate inline images from accumulating when a plugin
+/// re-registers the same cached image on buffer switches or after buffer
+/// mutations shift positions.
 pub fn add_raw_content(cx: &mut Context, payload: String, image_id: u64, height: u16, char_idx: usize) {
     use helix_core::text_annotations::RawContent;
 
@@ -7264,7 +7286,24 @@ pub fn add_raw_content(cx: &mut Context, payload: String, image_id: u64, height:
 
     if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
         let content = RawContent::new(char_idx, image_id, payload_bytes, height);
-        doc.add_raw_content(view_id, content);
+        // Replace-in-place semantics: PartialEq on RawContent compares
+        // (id, char_idx), so any pre-existing entry with matching keys is
+        // removed before we push the fresh one.
+        doc.add_or_replace_raw_content(view_id, content);
+    }
+}
+
+/// Remove all raw content (inline images, etc.) associated with the current
+/// view. Plugins call this before bulk re-registration to guarantee they're
+/// not accumulating stale entries with fresh ids.
+pub fn clear_raw_content(cx: &mut Context) {
+    let view_id = cx.editor.tree.focus;
+    if !cx.editor.tree.contains(view_id) {
+        return;
+    }
+    let doc_id = cx.editor.tree.get(view_id).doc;
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        doc.clear_raw_content(view_id);
     }
 }
 

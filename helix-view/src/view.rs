@@ -521,16 +521,21 @@ impl View {
         // Add raw content (inline images, etc.)
         if let Some(raw_content) = doc.raw_content.get(&self.id) {
             if !raw_content.is_empty() {
-                log::error!(
-                    "[view.rs:text_annotations] Adding {} raw_content items for view_id={:?}",
+                log::trace!(
+                    "text_annotations: adding {} raw_content entries for view {:?}",
                     raw_content.len(),
                     self.id
                 );
-                for (i, rc) in raw_content.iter().enumerate() {
-                    log::error!(
-                        "[view.rs:text_annotations]   [{}] id={}, char_idx={}, height={}, payload_bytes={}",
-                        i, rc.id, rc.char_idx, rc.height, rc.payload.len()
-                    );
+                if log::log_enabled!(log::Level::Trace) {
+                    for (i, rc) in raw_content.iter().enumerate() {
+                        log::trace!(
+                            "text_annotations:   [{i}] id={} char_idx={} height={} bytes={}",
+                            rc.id,
+                            rc.char_idx,
+                            rc.height,
+                            rc.payload.len()
+                        );
+                    }
                 }
                 text_annotations.add_raw_content(raw_content);
             }
