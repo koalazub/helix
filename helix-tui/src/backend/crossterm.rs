@@ -102,6 +102,16 @@ pub struct CrosstermBackend<W: Write> {
     supports_keyboard_enhancement_protocol: OnceCell<bool>,
     mouse_capture_enabled: bool,
     supports_bracketed_paste: bool,
+    /// Image ids that have been transmitted to the terminal this
+    /// session. Used so `sync_images` can delete only *stale* entries
+    /// (transmitted previously but no longer in the current frame's
+    /// raw_writes) instead of the nuclear `a=d,d=a` (delete all
+    /// visible) it used to fire on every flush. That blanket delete
+    /// made the higher-level "transmit once per id" optimisation in
+    /// `Terminal::flush` race against itself — the image was wiped
+    /// every frame and never retransmitted, so placeholder cells
+    /// resolved to nothing.
+    transmitted_images: std::collections::HashSet<u64>,
 }
 
 impl<W> CrosstermBackend<W>
@@ -120,6 +130,7 @@ where
             supports_keyboard_enhancement_protocol: OnceCell::new(),
             mouse_capture_enabled: false,
             supports_bracketed_paste: true,
+            transmitted_images: std::collections::HashSet::new(),
         }
     }
 
@@ -291,9 +302,10 @@ where
     }
 
     fn draw_raw(&mut self, content: &[(u64, u16, u16, Vec<u8>)]) -> io::Result<()> {
-        for (_id, x, y, bytes) in content {
+        for (id, x, y, bytes) in content {
             queue!(self.buffer, MoveTo(*x, *y))?;
             self.buffer.write_all(bytes)?;
+            self.transmitted_images.insert(*id);
         }
         Ok(())
     }
@@ -303,22 +315,43 @@ where
             // Kitty protocol: a=d (delete), d=I (by ID), i=<id>, q=2 (quiet)
             let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
             self.buffer.write_all(delete_cmd.as_bytes())?;
+            self.transmitted_images.remove(id);
         }
         Ok(())
     }
 
     fn clear_all_images(&mut self) -> io::Result<()> {
-        // Crossterm backend doesn't track transmitted images, so delete all visible
-        // Kitty protocol: a=d (delete), d=a (all visible), q=2 (quiet)
-        let delete_cmd = "\x1b_Ga=d,d=a,q=2\x1b\\";
-        self.buffer.write_all(delete_cmd.as_bytes())?;
+        for id in self.transmitted_images.drain() {
+            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
+            self.buffer.write_all(delete_cmd.as_bytes())?;
+        }
         Ok(())
     }
 
-    fn sync_images(&mut self, _current_ids: &[u64]) -> io::Result<Vec<u64>> {
-        // Crossterm doesn't track images, just delete all and let them be redrawn
-        self.clear_all_images()?;
-        Ok(Vec::new())
+    fn sync_images(&mut self, current_ids: &[u64]) -> io::Result<Vec<u64>> {
+        // Only delete images that were previously transmitted but are
+        // no longer referenced by the current frame. Previously this
+        // was `clear_all_images` unconditionally, which blew away
+        // every cached image on every flush and made the caller's
+        // "transmit once per id" optimisation impossible — the second
+        // frame would skip retransmission (because the id was in the
+        // previous frame's raw_writes) but the backend had already
+        // deleted the image from Kitty's cache, so the placeholder
+        // cells had nothing to resolve to. The termina backend has
+        // always done it this way; crossterm was the odd one out.
+        let current_set: std::collections::HashSet<u64> = current_ids.iter().copied().collect();
+        let stale: Vec<u64> = self
+            .transmitted_images
+            .iter()
+            .filter(|id| !current_set.contains(id))
+            .copied()
+            .collect();
+        for id in &stale {
+            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
+            self.buffer.write_all(delete_cmd.as_bytes())?;
+            self.transmitted_images.remove(id);
+        }
+        Ok(stale)
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> {

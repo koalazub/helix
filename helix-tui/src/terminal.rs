@@ -158,58 +158,44 @@ where
 
         self.backend.sync_images(&current_image_ids)?;
 
-        let prev_images: std::collections::HashMap<u64, (u16, u16)> = previous_buffer
+        let prev_image_ids: std::collections::HashSet<u64> = previous_buffer
             .raw_writes
             .iter()
-            .map(|(id, x, y, _)| (*id, (*x, *y)))
+            .map(|(id, _, _, _)| *id)
             .collect();
 
-        let curr_images: std::collections::HashMap<u64, (u16, u16)> = current_buffer
-            .raw_writes
-            .iter()
-            .map(|(id, x, y, _)| (*id, (*x, *y)))
-            .collect();
-
-        // Decide which raw images need to be flushed out of the terminal
-        // on this frame. Three disjoint cases produce a delete:
+        // Image delete policy. This editor uses Kitty's Unicode
+        // placeholder protocol (`U=1`) for inline plots — the image is
+        // transmitted once under a stable id, Kitty caches it, and the
+        // placeholder cells written into the normal text grid reference
+        // it by id wherever they happen to be drawn. In that world the
+        // auto-delete logic an earlier version of this flush used
+        // (anything in prev but not in curr → delete) actively breaks
+        // things: when the user switches buffers or scrolls the plot
+        // out of view, the RawContent stops emitting raw_writes for a
+        // frame, the auto-delete fires, Kitty drops the cache entry,
+        // and when the user comes back the placeholder cells have no
+        // image to resolve to. We'd then re-transmit on the next frame,
+        // but the user briefly sees empty space where the plot should
+        // be, and under certain race conditions the re-transmission
+        // doesn't land.
         //
-        //   1. The image is present in both frames but its position
-        //      changed (scroll, buffer edit, window resize). We have to
-        //      erase the old pixels or Kitty leaves them behind.
-        //   2. The image was in the previous frame but is entirely gone
-        //      in the current frame. This happens whenever an image
-        //      scrolls out of view — Helix's document formatter never
-        //      reaches that char index during the traversal, so it
-        //      never calls `delete_raw_image` for it, and without an
-        //      explicit delete here the pixels pin themselves to their
-        //      last terminal position and show through subsequent
-        //      scrolls as a ghost image. That was the original
-        //      "pinned inline plot" bug.
-        //   3. Any image id queued by `delete_raw_image` during the
-        //      frame (for example the off-viewport guard in
-        //      ui/document.rs) that isn't already on the list.
-        let mut to_delete: Vec<u64> = Vec::new();
-        for (id, (px, py)) in &prev_images {
-            match curr_images.get(id) {
-                Some((cx, cy)) if cx != px || cy != py => to_delete.push(*id),
-                Some(_) => {}
-                None => to_delete.push(*id),
-            }
-        }
+        // Only honour *explicit* deletes now — anything the plugin
+        // has queued on `pending_deletes` by calling
+        // `delete_raw_image` or clearing raw content. That's a small
+        // behavioural regression for any future direct-placement
+        // (`a=T`) consumer that relied on auto-cleanup, but the old
+        // path is deprecated and nothelix no longer uses it.
+        let to_delete: Vec<u64> = current_buffer.pending_deletes.clone();
 
-        for id in &current_buffer.pending_deletes {
-            if !to_delete.contains(id) {
-                to_delete.push(*id);
-            }
-        }
-
+        // Transmit virtual-placement images once on first sighting.
+        // Position changes don't require retransmission because the
+        // placeholder cells drive rendering, not the transmission's
+        // anchor point.
         let to_draw: Vec<&(u64, u16, u16, Vec<u8>)> = current_buffer
             .raw_writes
             .iter()
-            .filter(|(id, x, y, _)| match prev_images.get(id) {
-                None => true,
-                Some((px, py)) => x != px || y != py,
-            })
+            .filter(|(id, _, _, _)| !prev_image_ids.contains(id))
             .collect();
 
         if !to_delete.is_empty() {

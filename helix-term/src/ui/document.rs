@@ -92,6 +92,23 @@ pub fn render_text(
     let mut last_line_indent_level = 0;
     let mut reached_view_top = false;
 
+    // Defer raw_content draws until after the normal grapheme pass.
+    // Previously we called `draw_raw_content` inline when the
+    // formatter emitted a grapheme carrying a RawContent reference,
+    // and `doc_formatter` reserved `raw.height` phantom rows in the
+    // visual coordinate space so those placeholder cells had a gap
+    // to live in. That phantom-row scheme broke everything else
+    // (scroll, cursor nav, page-up/down). We now let the formatter
+    // walk normal rows without any bump and buffer up every
+    // RawContent hit here — after the grapheme loop finishes, we
+    // replay them in insertion order so the placeholder cells
+    // overwrite whatever text graphemes happened to be drawn on
+    // the same rows. The plugin is responsible for making sure
+    // there are enough blank buffer lines below each `# @image`
+    // marker for the grid to paint on.
+    let mut deferred_raw_content: Vec<(&helix_core::text_annotations::RawContent, Position)> =
+        Vec::new();
+
     loop {
         let Some(mut grapheme) = formatter.next() else {
             break;
@@ -157,11 +174,16 @@ pub fn render_text(
         };
         decorations.decorate_grapheme(renderer, &grapheme);
 
-        // Handle raw content (inline images, etc.)
+        // Raw content buffering — the placeholder cells will be
+        // drawn after the grapheme loop so they overwrite the
+        // buffer-line text they share rows with.
         if let Some(raw) = grapheme.raw_content {
-            renderer.draw_raw_content(raw, grapheme.visual_pos);
-            last_line_end = 0;
-            continue;
+            deferred_raw_content.push((raw, grapheme.visual_pos));
+            // Fall through and still draw the underlying grapheme —
+            // `draw_raw_content` will overwrite row 0 of the image
+            // where this grapheme lives, and rows 1..height over
+            // whatever blank lines the plugin has provisioned
+            // below the marker.
         }
 
         let virt = grapheme.is_virtual();
@@ -177,7 +199,15 @@ pub fn render_text(
     }
 
     renderer.draw_indent_guides(last_line_indent_level, last_line_pos.visual_line);
-    decorations.render_virtual_lines(renderer, last_line_pos, last_line_end)
+    decorations.render_virtual_lines(renderer, last_line_pos, last_line_end);
+
+    // Now paint every deferred raw_content, in the order the
+    // formatter hit them. Placeholder cells go on top of the text
+    // graphemes we drew above, so the image visually owns the
+    // rows the plugin padded with blank lines.
+    for (raw, pos) in deferred_raw_content {
+        renderer.draw_raw_content(raw, pos);
+    }
 }
 
 #[derive(Debug)]
@@ -331,33 +361,19 @@ impl<'a> TextRenderer<'a> {
         raw: &helix_core::text_annotations::RawContent,
         mut position: Position,
     ) {
-        // `trace` (not `debug` or `error`) — draw_raw_content runs once
-        // per image per frame, which is far too chatty for anything
-        // louder than trace-level logging. Enable with
-        // `RUST_LOG=helix_term::ui::document=trace`.
-        log::trace!(
-            "draw_raw_content: id={} buf_pos=({},{}) offset=({},{}) \
-             viewport=({},{},{},{}) height={}",
-            raw.id,
-            position.row,
-            position.col,
-            self.offset.row,
-            self.offset.col,
-            self.viewport.x,
-            self.viewport.y,
-            self.viewport.width,
-            self.viewport.height,
-            raw.height
-        );
-
+        // Viewport clipping. With virtual placement the image lives
+        // in Kitty's cache as long as the session is alive, so the
+        // only reason to skip drawing is when the anchor is outside
+        // the visible area. We intentionally do *not* bail when the
+        // image's full height would extend past the viewport bottom:
+        // the per-row loop below guards each placeholder row
+        // individually with `y < viewport_bottom`, so partial rendering
+        // already works. An earlier bottom-clip early return was
+        // throwing the entire grid away whenever the anchor landed in
+        // the last `raw.height` rows of the viewport, which manifested
+        // as "image gone, empty space there" for any plot near the
+        // bottom of the screen.
         if position.row < self.offset.row {
-            log::trace!(
-                "draw_raw_content: id={} above viewport (row {} < offset {}), deleting",
-                raw.id,
-                position.row,
-                self.offset.row
-            );
-            self.surface.delete_raw_image(raw.id);
             return;
         }
         position.row -= self.offset.row;
@@ -368,46 +384,38 @@ impl<'a> TextRenderer<'a> {
         if screen_x >= self.viewport.x + self.viewport.width
             || screen_y >= self.viewport.y + self.viewport.height
         {
-            log::trace!(
-                "draw_raw_content: id={} off-viewport screen=({},{}), deleting",
-                raw.id,
-                screen_x,
-                screen_y
-            );
-            self.surface.delete_raw_image(raw.id);
             return;
         }
 
         let viewport_bottom = self.viewport.y + self.viewport.height;
-        if screen_y + raw.height > viewport_bottom {
-            log::trace!(
-                "draw_raw_content: id={} bottom clipped (screen_y={} + height={} > {}), deleting",
-                raw.id,
-                screen_y,
-                raw.height,
-                viewport_bottom
-            );
-            self.surface.delete_raw_image(raw.id);
-            return;
-        }
-
-        log::trace!(
-            "draw_raw_content: id={} drawing at screen=({},{})",
-            raw.id,
-            screen_x,
-            screen_y
-        );
 
         if raw.uses_placeholders() {
             self.surface
                 .write_raw_bytes(raw.id, screen_x, screen_y, &raw.payload);
+
+            // Kitty's Unicode placeholder protocol reads the SGR
+            // foreground colour of each placeholder cell as a 24-bit
+            // image id. We derive (R, G, B) from the low 24 bits of
+            // `raw.id` — which `add_raw_content_with_placeholders`
+            // extracted from the APC `i=<id>` parameter, so it matches
+            // the id Kitty cached the transmission under. Routing this
+            // through `Style` instead of embedding `\x1b[38;2;…m` in
+            // the row text is critical: `set_string` strips ESC bytes
+            // (they have `width() == 0`) and would otherwise render
+            // the rest of the escape as literal `[38;2;…m` text.
+            let id_24 = (raw.id & 0x00FF_FFFF) as u32;
+            let r = ((id_24 >> 16) & 0xFF) as u8;
+            let g = ((id_24 >> 8) & 0xFF) as u8;
+            let b = (id_24 & 0xFF) as u8;
+            let placeholder_style =
+                Style::default().fg(helix_view::graphics::Color::Rgb(r, g, b));
 
             if let Some(placeholder_rows) = &raw.placeholder_rows {
                 for (row_idx, row_text) in placeholder_rows.iter().enumerate() {
                     let y = screen_y + row_idx as u16;
                     if y < viewport_bottom {
                         self.surface
-                            .set_string(screen_x, y, row_text, Style::default());
+                            .set_string(screen_x, y, row_text, placeholder_style);
                     }
                 }
             }

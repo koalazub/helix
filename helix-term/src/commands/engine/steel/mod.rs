@@ -7246,6 +7246,37 @@ pub fn clear_plugin_overlays(cx: &mut Context) {
 }
 
 pub fn insert_string(cx: &mut Context, string: SteelString) {
+    // Debug trace so we can pinpoint which call is responsible when a
+    // plugin storms the document with single-char inserts. The string
+    // is truncated and the newlines are escaped so the log line stays
+    // on a single line even for a raw "\n" insert. Enable with
+    // `RUST_LOG=helix_term::commands::engine::steel=debug` or a wider
+    // filter — `-vv` at the CLI is enough.
+    if log::log_enabled!(log::Level::Debug) {
+        let preview: String = string
+            .as_str()
+            .chars()
+            .take(40)
+            .flat_map(|c| match c {
+                '\n' => "\\n".chars().collect::<Vec<_>>(),
+                '\r' => "\\r".chars().collect::<Vec<_>>(),
+                '\t' => "\\t".chars().collect::<Vec<_>>(),
+                c => vec![c],
+            })
+            .collect();
+        let (view, doc) = current_ref!(cx.editor);
+        let cursor = doc
+            .selection(view.id)
+            .primary()
+            .cursor(doc.text().slice(..));
+        log::debug!(
+            "steel.insert_string: cursor_char={} len={} preview=\"{}\"",
+            cursor,
+            string.as_str().len(),
+            preview
+        );
+    }
+
     let (view, doc) = current!(cx.editor);
 
     let indent = Tendril::from(string.as_str());
@@ -7321,12 +7352,109 @@ pub fn add_raw_content_with_placeholders(
     let view_id = view.id;
     let doc_id = view.doc;
 
-    let id = RAW_CONTENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    // The RawContent id is used by the render layer's diffing and dedup
+    // logic. For Unicode placeholder images we want a *stable* id per
+    // logical image (typically "this cell has one plot") so that
+    // re-execution replaces the old entry in place via
+    // `add_or_replace_raw_content`. The payload already carries this
+    // identity: `kitty_placeholder_payload` embeds `i=<image_id>` in
+    // the first APC escape, matching the 24-bit id that the placeholder
+    // cells encode as their SGR foreground colour. Parse it out so
+    // Helix's internal id tracks Kitty's image cache key 1:1.
+    //
+    // If parsing fails (unexpected payload shape, or the caller passed
+    // something that isn't a Kitty APC escape), fall back to the global
+    // counter so the image still appears — it will dedup only within a
+    // single cell run, not across re-execution, but that's better than
+    // silently dropping the draw.
+    let id = extract_kitty_image_id(&payload)
+        .unwrap_or_else(|| RAW_CONTENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
+
     let payload_bytes = payload.into_bytes();
     let placeholder_rows: Vec<String> = placeholder_rows_str.lines().map(|s| s.to_string()).collect();
 
     if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
         let content = RawContent::with_placeholders(char_idx, id, payload_bytes, height, width, placeholder_rows);
-        doc.add_raw_content(view_id, content);
+        // Use the idempotent replace-by-id variant so re-executing a
+        // cell overwrites the old entry instead of stacking a second
+        // one at a slightly drifted char_idx (which caused the old
+        // "doubled plot" smearing under direct placement).
+        doc.add_or_replace_raw_content(view_id, content);
+    }
+}
+
+/// Parse the `i=<digits>` parameter from a Kitty APC transmission
+/// escape. Returns `None` if the payload isn't a Kitty escape or
+/// doesn't carry an id.
+///
+/// The escape shape we care about is:
+///
+/// ```text
+/// \x1b_Ga=T,f=100,t=d,q=2,U=1,i=1001,m=0;<base64>\x1b\\
+/// ```
+///
+/// We scan for `,i=` or `Gi=` (start of the parameter list), then read
+/// the following decimal digits until a non-digit. Robust to both
+/// placements because the comma-separated parameter list is order-
+/// independent and the scan accepts any delimiter before `i=`.
+fn extract_kitty_image_id(payload: &str) -> Option<u64> {
+    // Only look inside the first APC escape — we don't care about
+    // continuation chunks (`m=1` ones), they reuse the same id anyway.
+    let apc_start = payload.find("\x1b_G")?;
+    let rest = &payload[apc_start + 3..];
+    let header_end = rest.find(';')?;
+    let header = &rest[..header_end];
+
+    // The header is a comma-separated list of `key=value` pairs. Walk
+    // it and return the first `i=<u64>` we see.
+    for field in header.split(',') {
+        if let Some(value) = field.strip_prefix("i=") {
+            return value.parse::<u64>().ok();
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod kitty_image_id_tests {
+    use super::extract_kitty_image_id;
+
+    #[test]
+    fn extracts_id_from_virtual_placement() {
+        let payload = "\x1b_Ga=T,f=100,t=d,q=2,U=1,i=1001,m=0;abcd\x1b\\";
+        assert_eq!(extract_kitty_image_id(payload), Some(1001));
+    }
+
+    #[test]
+    fn extracts_id_from_direct_placement() {
+        // Direct-placement escape (what graphics.rs emits) also carries i=.
+        let payload = "\x1b_Ga=T,f=100,t=d,q=2,I=42,r=12,m=0;abcd\x1b\\";
+        // Note: this uses capital I (client ref), not lowercase i.
+        // extract_kitty_image_id should correctly NOT match capital I.
+        assert_eq!(extract_kitty_image_id(payload), None);
+    }
+
+    #[test]
+    fn returns_none_on_non_apc_payload() {
+        assert_eq!(extract_kitty_image_id("hello world"), None);
+        assert_eq!(extract_kitty_image_id(""), None);
+    }
+
+    #[test]
+    fn returns_none_on_unterminated_header() {
+        // No `;` terminating the header — malformed, shouldn't panic.
+        assert_eq!(extract_kitty_image_id("\x1b_Ga=T,i=5"), None);
+    }
+
+    #[test]
+    fn ignores_bad_integer() {
+        let payload = "\x1b_Ga=T,i=notanumber;abcd\x1b\\";
+        assert_eq!(extract_kitty_image_id(payload), None);
+    }
+
+    #[test]
+    fn handles_id_at_start_of_parameter_list() {
+        let payload = "\x1b_Gi=7,a=T,U=1;abcd\x1b\\";
+        assert_eq!(extract_kitty_image_id(payload), Some(7));
     }
 }

@@ -1582,27 +1582,16 @@ impl Document {
         //      order of entries that straddled a delete.
         let old_len = old_doc.len_chars();
         let new_len = self.text.len_chars();
-        for (view_id, raw_contents) in self.raw_content.iter_mut() {
+        for raw_contents in self.raw_content.values_mut() {
             if raw_contents.is_empty() {
                 continue;
             }
             // (1) drop anything whose pre-transaction char_idx was out of
             // bounds — update_positions would panic on it.
-            let pre_filter = raw_contents.len();
             raw_contents.retain(|rc| rc.char_idx <= old_len);
-            let dropped_pre = pre_filter - raw_contents.len();
 
             // (2) ensure sorted by char_idx before the remap.
             raw_contents.sort_by_key(|rc| rc.char_idx);
-
-            let before_positions: Vec<(u64, usize)> = if log::log_enabled!(log::Level::Debug) {
-                raw_contents
-                    .iter()
-                    .map(|rc| (rc.id, rc.char_idx))
-                    .collect()
-            } else {
-                Vec::new()
-            };
 
             changes.update_positions(
                 raw_contents
@@ -1611,31 +1600,8 @@ impl Document {
             );
 
             // (3) post-filter + re-sort.
-            let mid = raw_contents.len();
             raw_contents.retain(|rc| rc.char_idx <= new_len);
-            let dropped_post = mid - raw_contents.len();
             raw_contents.sort_by_key(|rc| rc.char_idx);
-
-            if log::log_enabled!(log::Level::Debug) {
-                let after_positions: std::collections::HashMap<u64, usize> = raw_contents
-                    .iter()
-                    .map(|rc| (rc.id, rc.char_idx))
-                    .collect();
-                let mut moved = 0;
-                for (id, before_idx) in &before_positions {
-                    if let Some(after_idx) = after_positions.get(id) {
-                        if after_idx != before_idx {
-                            moved += 1;
-                        }
-                    }
-                }
-                log::debug!(
-                    "raw_content.remap: view={view_id:?} \
-                     pre_dropped={dropped_pre} moved={moved} post_dropped={dropped_post} \
-                     final={}",
-                    raw_contents.len()
-                );
-            }
         }
 
         helix_event::dispatch(DocumentDidChange {
@@ -2436,12 +2402,6 @@ impl Document {
         view_id: ViewId,
         content: helix_core::text_annotations::RawContent,
     ) {
-        log::debug!(
-            "raw_content.add: view={view_id:?} id={} char_idx={} height={}",
-            content.id,
-            content.char_idx,
-            content.height
-        );
         let entry = self.raw_content.entry(view_id).or_insert_with(Vec::new);
         entry.push(content);
         // Preserve the sort-by-char_idx invariant the layer iterator relies on.
@@ -2478,18 +2438,10 @@ impl Document {
         content: helix_core::text_annotations::RawContent,
     ) {
         let entry = self.raw_content.entry(view_id).or_insert_with(Vec::new);
-        let before = entry.len();
         let new_id = content.id;
         entry.retain(|rc| rc.id != new_id);
-        let removed = before - entry.len();
-        let char_idx = content.char_idx;
         entry.push(content);
         entry.sort_by_key(|rc| rc.char_idx);
-        log::debug!(
-            "raw_content.add_or_replace: view={view_id:?} id={new_id} char_idx={char_idx} \
-             replaced={removed} total={}",
-            entry.len()
-        );
     }
 
     pub fn set_raw_content(
@@ -2498,20 +2450,11 @@ impl Document {
         mut content: Vec<helix_core::text_annotations::RawContent>,
     ) {
         content.sort_by_key(|rc| rc.char_idx);
-        log::debug!(
-            "raw_content.set: view={view_id:?} entries={}",
-            content.len()
-        );
         self.raw_content.insert(view_id, content);
     }
 
     pub fn clear_raw_content(&mut self, view_id: ViewId) {
-        let removed = self
-            .raw_content
-            .remove(&view_id)
-            .map(|v| v.len())
-            .unwrap_or(0);
-        log::debug!("raw_content.clear: view={view_id:?} removed={removed}");
+        self.raw_content.remove(&view_id);
     }
 
     /// Get the inlay hints for this document and `view_id`.

@@ -481,11 +481,23 @@ impl<'t> Iterator for DocumentFormatter<'t> {
             self.annotations.process_virtual_text_anchors(&grapheme);
         }
 
-        // Handle raw content height
-        if let Some(raw) = raw_content {
-            self.visual_pos.row += raw.height as usize;
-            self.visual_pos.col = 0;
-        }
+        // Previously we bumped `visual_pos.row` by `raw.height` right
+        // here so an inline image reserved a column of "phantom" rows
+        // in the visual coordinate space. That made scroll, cursor
+        // navigation, `char_idx_at_visual_offset`, and the rest of
+        // the editor reason about rows that had no backing graphemes,
+        // which in turn produced "buffer disappears on page up/down",
+        // "cursor can't move through an image", and "typing near an
+        // image drags it along with the cursor". The fix is to stop
+        // reserving phantom rows and let `draw_raw_content` paint
+        // the image over real buffer lines — the plugin takes
+        // responsibility for inserting `raw.height - 1` blank lines
+        // below the `# @image` marker so there's real space for the
+        // grid to land on.
+        //
+        // Keeping the reference here intentionally so the grapheme
+        // still carries `raw_content` for `render_text` to defer.
+        let _ = raw_content;
 
         if grapheme.raw == Grapheme::Newline {
             // move to end of newline char
