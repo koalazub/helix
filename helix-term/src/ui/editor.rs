@@ -205,6 +205,14 @@ impl EditorView {
             inline_diagnostic_config,
             config.end_of_line_diagnostics,
         ));
+
+        // Plugin-staged math layouts (stacked limits for \int / \sum,
+        // fraction numerator/denominator rows, etc.). Only registers when
+        // the Document actually has entries so the decoration pipeline
+        // isn't visited when nothing is pending.
+        if !doc.math_lines_above.is_empty() || !doc.math_lines_below.is_empty() {
+            decorations.add_decoration(text_decorations::MathAnnotations::new(doc, theme));
+        }
         render_document(
             surface,
             inner,

@@ -5233,6 +5233,10 @@ callback : (-> any?)
     module.register_fn("send-lsp-notification", send_arbitrary_lsp_notification);
     module.register_fn("set-overlays!", set_plugin_overlays);
     module.register_fn("clear-overlays!", clear_plugin_overlays);
+    module.register_fn("set-math-lines-above!", set_math_lines_above);
+    module.register_fn("set-math-lines-below!", set_math_lines_below);
+    module.register_fn("clear-math-lines!", clear_math_lines);
+    module.register_fn("clear-all-math-lines!", clear_all_math_lines);
     if generate_sources {
         builtin_misc_module.push_str(
             r#"
@@ -7233,6 +7237,91 @@ pub fn clear_plugin_overlays(cx: &mut Context) {
     };
     if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
         doc.clear_plugin_overlays(view_id);
+    }
+}
+
+/// `(set-math-lines-above! LINE-IDX '("  1" "___"))` — stash the list of
+/// virtual lines that should render above source line `LINE-IDX`. An empty
+/// list clears the entry. The plugin is responsible for leading whitespace
+/// so limits line up with their operator's column.
+pub fn set_math_lines_above(
+    cx: &mut Context,
+    line_idx: usize,
+    lines_val: steel::rvals::SteelVal,
+) {
+    set_math_lines_impl(cx, line_idx, lines_val, /* above */ true);
+}
+
+/// Mirror of `set-math-lines-above!` for rows rendered BELOW the source
+/// line.
+pub fn set_math_lines_below(
+    cx: &mut Context,
+    line_idx: usize,
+    lines_val: steel::rvals::SteelVal,
+) {
+    set_math_lines_impl(cx, line_idx, lines_val, /* above */ false);
+}
+
+fn set_math_lines_impl(
+    cx: &mut Context,
+    line_idx: usize,
+    lines_val: steel::rvals::SteelVal,
+    above: bool,
+) {
+    let doc_id = {
+        let view_id = cx.editor.tree.focus;
+        match cx.editor.tree.try_get(view_id) {
+            Some(v) => v.doc,
+            None => return,
+        }
+    };
+    let doc = match cx.editor.documents.get_mut(&doc_id) {
+        Some(d) => d,
+        None => return,
+    };
+
+    let mut lines: Vec<String> = Vec::new();
+    if let steel::rvals::SteelVal::ListV(items) = lines_val {
+        for item in items.iter() {
+            if let steel::rvals::SteelVal::StringV(s) = item {
+                lines.push(s.to_string());
+            }
+        }
+    }
+
+    if above {
+        doc.set_math_lines_above(line_idx, lines);
+    } else {
+        doc.set_math_lines_below(line_idx, lines);
+    }
+}
+
+/// Drop both above- and below-math annotations for a single source line.
+pub fn clear_math_lines(cx: &mut Context, line_idx: usize) {
+    let doc_id = {
+        let view_id = cx.editor.tree.focus;
+        match cx.editor.tree.try_get(view_id) {
+            Some(v) => v.doc,
+            None => return,
+        }
+    };
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        doc.clear_math_lines(line_idx);
+    }
+}
+
+/// Wipe every math annotation on the current document — the plugin calls
+/// this before re-staging annotations from scratch.
+pub fn clear_all_math_lines(cx: &mut Context) {
+    let doc_id = {
+        let view_id = cx.editor.tree.focus;
+        match cx.editor.tree.try_get(view_id) {
+            Some(v) => v.doc,
+            None => return,
+        }
+    };
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        doc.clear_all_math_lines();
     }
 }
 

@@ -1,6 +1,7 @@
 use crate::{
     align_view,
     annotations::diagnostics::InlineDiagnostics,
+    annotations::math::MathAnnotations,
     document::{DocumentColorSwatches, DocumentInlayHints},
     editor::{GutterConfig, GutterType},
     graphics::Rect,
@@ -516,6 +517,13 @@ impl View {
                 doc.view_offset(self.id).horizontal_offset,
                 config,
             ));
+        }
+
+        // Reserve virtual rows for plugin-staged math layouts (integral
+        // limits, fraction stacks, etc.). The actual painting happens in
+        // helix_term::ui::text_decorations::MathAnnotations.
+        if !doc.math_lines_above.is_empty() || !doc.math_lines_below.is_empty() {
+            text_annotations.add_line_annotation(MathAnnotations::new(doc));
         }
 
         // Add raw content (inline images, etc.)
