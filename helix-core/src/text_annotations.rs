@@ -122,6 +122,11 @@ pub struct RawContent {
     /// Each entry is a row of placeholder text to render in normal cells.
     /// If present, the payload is sent once, and these strings are rendered each frame.
     pub placeholder_rows: Option<Arc<Vec<String>>>,
+
+    /// Whether this content is an animated overlay (e.g. animated GIF).
+    /// The redraw loop uses this flag to schedule continuous redraws for animated
+    /// overlays while skipping unnecessary redraws for static images.
+    pub is_animating: bool,
 }
 
 impl RawContent {
@@ -133,6 +138,7 @@ impl RawContent {
             height,
             width: None,
             placeholder_rows: None,
+            is_animating: false,
         }
     }
 
@@ -155,12 +161,20 @@ impl RawContent {
             height,
             width: Some(width),
             placeholder_rows: Some(Arc::new(placeholder_rows)),
+            is_animating: false,
         }
     }
 
     /// Returns true if this content uses Unicode placeholder rendering
     pub fn uses_placeholders(&self) -> bool {
         self.placeholder_rows.is_some()
+    }
+
+    /// Builder method to mark this content as animated.
+    /// Animated overlays trigger continuous redraws in the editor loop.
+    pub fn with_animating(mut self, animating: bool) -> Self {
+        self.is_animating = animating;
+        self
     }
 }
 
@@ -545,5 +559,22 @@ impl<'a> TextAnnotations<'a> {
             };
         }
         virt_off.row
+    }
+}
+
+#[cfg(test)]
+mod animation_tests {
+    use super::RawContent;
+
+    #[test]
+    fn raw_content_default_is_not_animating() {
+        let rc = RawContent::new(0, 1, vec![], 1);
+        assert!(!rc.is_animating);
+    }
+
+    #[test]
+    fn raw_content_animating_setter() {
+        let rc = RawContent::new(0, 1, vec![], 1).with_animating(true);
+        assert!(rc.is_animating);
     }
 }

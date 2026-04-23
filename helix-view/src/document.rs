@@ -2871,6 +2871,7 @@ mod test {
             char_idx: 0,
             width: None,
             placeholder_rows: None,
+            is_animating: false,
         };
         doc.add_raw_content(view_id, raw_content);
 
