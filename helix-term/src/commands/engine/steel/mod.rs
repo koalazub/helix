@@ -27,7 +27,7 @@ use helix_view::{
         SearchConfig, SmartTabConfig, StatusLineElement, TerminalConfig, WhitespaceConfig,
         WhitespaceRender, WhitespaceRenderValue,
     },
-    events::{DocumentDidOpen, DocumentFocusGained, DocumentFocusLost, DocumentSaved, SelectionDidChange},
+    events::{DocumentDidOpen, DocumentFocusGained, DocumentFocusLost, DocumentSaved, SelectionDidChange, ViewportChanged},
     extension::document_id_to_usize,
     graphics::CursorKind,
     input::KeyEvent,
@@ -4770,6 +4770,63 @@ fn register_hook(event_kind: String, callback_fn: SteelVal) -> steel::UnRecovera
                                 let mut args = [doc_id.into_steelval().unwrap()];
 
                                 // TODO: Do something with this error!
+                                engine.call_function_with_args_from_mut_slice(
+                                    cloned_func.clone(),
+                                    &mut args,
+                                )
+                            })
+                        {
+                            present_error_inside_engine_context(&mut ctx, guard, e);
+                        }
+                    });
+
+                    patch_callbacks(&mut ctx);
+
+                    res
+                };
+                job::dispatch_blocking_jobs(callback);
+
+                Ok(())
+            });
+
+            Ok(SteelVal::Void).into()
+        }
+
+        "viewport-changed" => {
+            register_hook!(move |event: &mut ViewportChanged| {
+                let cloned_func = rooted.value().clone();
+                let view_id = event.view_id;
+                let doc_id = event.doc_id;
+                let anchor = event.anchor_char_idx;
+                let height = event.height;
+
+                let callback = move |editor: &mut Editor,
+                                     _compositor: &mut Compositor,
+                                     jobs: &mut job::Jobs| {
+                    let mut ctx = Context {
+                        register: None,
+                        count: None,
+                        editor,
+                        callback: Vec::new(),
+                        on_next_key_callback: None,
+                        jobs,
+                    };
+                    let res = enter_engine(|guard| {
+                        if !is_current_generation(generation) {
+                            return;
+                        }
+
+                        if let Err(e) = guard
+                            .with_mut_reference::<Context, Context>(&mut ctx)
+                            .consume(move |engine, args| {
+                                let context = args[0].clone();
+                                engine.update_value("*helix.cx*", context);
+                                let mut args = [
+                                    view_id.into_steelval().unwrap(),
+                                    doc_id.into_steelval().unwrap(),
+                                    (anchor as i64).into_steelval().unwrap(),
+                                    (height as i64).into_steelval().unwrap(),
+                                ];
                                 engine.call_function_with_args_from_mut_slice(
                                     cloned_func.clone(),
                                     &mut args,
