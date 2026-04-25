@@ -2539,6 +2539,14 @@ impl Document {
         self.raw_content.remove(&view_id);
     }
 
+    /// Returns `true` if any raw content registered on this document has
+    /// `is_animating` set, indicating continuous redraws are needed.
+    pub fn has_animating_raw_content(&self) -> bool {
+        self.raw_content
+            .values()
+            .any(|v| v.iter().any(|rc| rc.is_animating))
+    }
+
     /// Register `lines` to render ABOVE source line `line_idx`. Pass an empty
     /// vector (or use [`Self::clear_math_lines`]) to remove existing entries
     /// for that line. The lines render in the order given — index 0 is the
@@ -2884,6 +2892,39 @@ mod test {
 
         // Verify raw_content is cleared after reload
         assert!(doc.raw_content.is_empty(), "raw_content should be cleared after reload");
+    }
+
+    #[test]
+    fn document_animating_predicate_false_by_default() {
+        use helix_core::text_annotations::RawContent;
+        let text = helix_core::Rope::from("");
+        let mut doc = Document::from(
+            text,
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        );
+        let view_id = ViewId::default();
+        doc.add_raw_content(view_id, RawContent::new(0, 1, vec![], 1));
+        assert!(!doc.has_animating_raw_content());
+    }
+
+    #[test]
+    fn document_animating_predicate_true_when_flagged() {
+        use helix_core::text_annotations::RawContent;
+        let text = helix_core::Rope::from("");
+        let mut doc = Document::from(
+            text,
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        );
+        let view_id = ViewId::default();
+        doc.add_raw_content(
+            view_id,
+            RawContent::new(0, 42, vec![], 1).with_animating(true),
+        );
+        assert!(doc.has_animating_raw_content());
     }
 
     macro_rules! decode {

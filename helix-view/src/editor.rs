@@ -439,6 +439,10 @@ pub struct Config {
 
     /// Whether to implicitly trust every workspace or not
     pub insecure: bool,
+
+    /// Animation-specific rendering configuration.
+    #[serde(default)]
+    pub animation: AnimationConfig,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, Clone, Copy)]
@@ -464,6 +468,28 @@ impl PickerStartPosition {
     #[must_use]
     pub fn is_current(self) -> bool {
         matches!(self, Self::Current)
+    }
+}
+
+/// Configuration for animation-aware rendering behaviour.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct AnimationConfig {
+    /// Target redraw interval while an animated overlay is on screen, in
+    /// milliseconds.  Defaults to 16 ms (~60 fps).  Values below 8 ms are
+    /// clamped to 8 ms at runtime to avoid runaway CPU use.
+    pub redraw_interval_ms: u64,
+    /// Maximum frames-per-second for animated overlays.  Informational only;
+    /// the effective cap comes from `redraw_interval_ms`.
+    pub max_fps: u32,
+}
+
+impl Default for AnimationConfig {
+    fn default() -> Self {
+        Self {
+            redraw_interval_ms: 16, // ~60 fps
+            max_fps: 60,
+        }
     }
 }
 
@@ -1173,6 +1199,7 @@ impl Default for Config {
             enable_steel: false,
 
             insecure: false,
+            animation: AnimationConfig::default(),
         }
     }
 }
@@ -1443,6 +1470,13 @@ impl Editor {
 
     pub fn config(&self) -> DynGuard<Config> {
         self.config.load()
+    }
+
+    /// Returns `true` if any open document currently has animated raw content
+    /// on screen.  Used by the redraw loop to choose a tighter debounce
+    /// interval while animations are running.
+    pub fn any_doc_has_animating_content(&self) -> bool {
+        self.documents.values().any(|d| d.has_animating_raw_content())
     }
 
     /// Call if the config has changed to let the editor update all
@@ -2354,7 +2388,14 @@ impl Editor {
                 _ = helix_event::redraw_requested() => {
                     if  !self.needs_redraw{
                         self.needs_redraw = true;
-                        let timeout = Instant::now() + Duration::from_millis(33);
+                        let interval_ms = if self.any_doc_has_animating_content() {
+                            // Use configured animation interval, with a floor of 8 ms (~120 fps)
+                            // to guard against runaway CPU use if misconfigured.
+                            self.config().animation.redraw_interval_ms.max(8)
+                        } else {
+                            33
+                        };
+                        let timeout = Instant::now() + Duration::from_millis(interval_ms);
                         if timeout < self.idle_timer.deadline() && timeout < self.redraw_timer.deadline(){
                             self.redraw_timer.as_mut().reset(timeout)
                         }
