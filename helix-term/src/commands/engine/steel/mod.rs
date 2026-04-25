@@ -816,6 +816,78 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
         "Add raw content with Unicode placeholder support for proper scrolling. Arguments: payload (string), height (rows), width (cols), placeholder_rows (newline-separated string), char_idx (position)"
     );
 
+    let mut template_function_arity_6 = |name: &str, doc: &str| {
+        if generate_sources {
+            let docstring = format_docstring(doc);
+
+            builtin_static_command_module.push_str(&format!(
+                r#"
+(provide {})
+;;@doc
+{}
+(define ({} arg1 arg2 arg3 arg4 arg5 arg6)
+    (helix.static.{} *helix.cx* arg1 arg2 arg3 arg4 arg5 arg6))
+"#,
+                name, docstring, name, name
+            ));
+        }
+    };
+
+    macro_rules! function6 {
+        ($name:expr, $function:expr, $doc:expr) => {{
+            module.register_fn($name, $function);
+            template_function_arity_6($name, $doc);
+        }};
+    }
+
+    function6!(
+        "add-or-replace-animating-raw-content!",
+        |cx: &mut Context,
+         view_id: ViewId,
+         char_idx: usize,
+         id: u64,
+         payload: Vec<u8>,
+         height: u16,
+         is_animating: bool| {
+            let current_focus = cx.editor.tree.focus;
+            if let Some(view) = cx.editor.tree.try_get(current_focus) {
+                let doc_id = view.doc;
+                if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+                    let rc = helix_core::text_annotations::RawContent::new(
+                        char_idx, id, payload, height,
+                    )
+                    .with_animating(is_animating);
+                    doc.add_or_replace_raw_content(view_id, rc);
+                }
+            }
+        },
+        "Add or replace animated raw content (e.g., animated GIF Kitty sequences) in the current document. The is_animating flag controls whether the editor schedules continuous redraws for this overlay. Arguments: view_id, char_idx (position), id (kitty image id), payload (bytes), height (rows), is_animating (bool)."
+    );
+
+    function6!(
+        "add-animating-raw-content!",
+        |cx: &mut Context,
+         view_id: ViewId,
+         char_idx: usize,
+         id: u64,
+         payload: Vec<u8>,
+         height: u16,
+         is_animating: bool| {
+            let current_focus = cx.editor.tree.focus;
+            if let Some(view) = cx.editor.tree.try_get(current_focus) {
+                let doc_id = view.doc;
+                if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+                    let rc = helix_core::text_annotations::RawContent::new(
+                        char_idx, id, payload, height,
+                    )
+                    .with_animating(is_animating);
+                    doc.add_raw_content(view_id, rc);
+                }
+            }
+        },
+        "Add animated raw content (e.g., animated GIF Kitty sequences) to the current document. Unlike add-or-replace-animating-raw-content!, this does not replace an existing entry with the same id. The is_animating flag controls whether the editor schedules continuous redraws for this overlay. Arguments: view_id, char_idx (position), id (kitty image id), payload (bytes), height (rows), is_animating (bool)."
+    );
+
     let mut template_function_no_context = |name: &str, doc: &str| {
         if generate_sources {
             let docstring = format_docstring(doc);
