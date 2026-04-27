@@ -18,6 +18,7 @@ use helix_core::{
 };
 use helix_event::register_hook;
 use helix_lsp::jsonrpc;
+use helix_tui::graphics::{GraphicsProtocol, KittyProtocol};
 use helix_view::{
     annotations::diagnostics::DiagnosticFilter,
     document::{DocumentInlayHints, DocumentInlayHintsId, Mode},
@@ -28,7 +29,7 @@ use helix_view::{
         WhitespaceRender, WhitespaceRenderValue,
     },
     events::{DocumentDidOpen, DocumentFocusGained, DocumentFocusLost, DocumentSaved, SelectionDidChange, ViewportChanged},
-    extension::document_id_to_usize,
+    steel_reflect::document_id_to_usize,
     graphics::CursorKind,
     input::KeyEvent,
     theme::Color,
@@ -7346,10 +7347,10 @@ pub fn remove_inlay_hint_by_id(
 pub fn remove_inlay_hint(cx: &mut Context, char_index: usize, _completion: SteelString) -> bool {
     // let text = completion.to_string();
     let view_id = cx.editor.tree.focus;
-    if !cx.editor.tree.contains(view_id) {
-        return false;
-    }
-    let doc_id = cx.editor.tree.get_mut(view_id).doc;
+    let doc_id = match cx.editor.tree.try_get(view_id) {
+        Some(view) => view.doc,
+        None => return false,
+    };
     let doc = match cx.editor.documents.get_mut(&doc_id) {
         Some(x) => x,
         None => return false,
@@ -7630,7 +7631,8 @@ pub fn add_raw_content_with_placeholders(
     // counter so the image still appears — it will dedup only within a
     // single cell run, not across re-execution, but that's better than
     // silently dropping the draw.
-    let id = extract_kitty_image_id(&payload)
+    let id = KittyProtocol
+        .extract_image_id(&payload)
         .unwrap_or_else(|| RAW_CONTENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
 
     let payload_bytes = payload.into_bytes();
@@ -7646,78 +7648,3 @@ pub fn add_raw_content_with_placeholders(
     }
 }
 
-/// Parse the `i=<digits>` parameter from a Kitty APC transmission
-/// escape. Returns `None` if the payload isn't a Kitty escape or
-/// doesn't carry an id.
-///
-/// The escape shape we care about is:
-///
-/// ```text
-/// \x1b_Ga=T,f=100,t=d,q=2,U=1,i=1001,m=0;<base64>\x1b\\
-/// ```
-///
-/// We scan for `,i=` or `Gi=` (start of the parameter list), then read
-/// the following decimal digits until a non-digit. Robust to both
-/// placements because the comma-separated parameter list is order-
-/// independent and the scan accepts any delimiter before `i=`.
-fn extract_kitty_image_id(payload: &str) -> Option<u64> {
-    // Only look inside the first APC escape — we don't care about
-    // continuation chunks (`m=1` ones), they reuse the same id anyway.
-    let apc_start = payload.find("\x1b_G")?;
-    let rest = &payload[apc_start + 3..];
-    let header_end = rest.find(';')?;
-    let header = &rest[..header_end];
-
-    // The header is a comma-separated list of `key=value` pairs. Walk
-    // it and return the first `i=<u64>` we see.
-    for field in header.split(',') {
-        if let Some(value) = field.strip_prefix("i=") {
-            return value.parse::<u64>().ok();
-        }
-    }
-    None
-}
-
-#[cfg(test)]
-mod kitty_image_id_tests {
-    use super::extract_kitty_image_id;
-
-    #[test]
-    fn extracts_id_from_virtual_placement() {
-        let payload = "\x1b_Ga=T,f=100,t=d,q=2,U=1,i=1001,m=0;abcd\x1b\\";
-        assert_eq!(extract_kitty_image_id(payload), Some(1001));
-    }
-
-    #[test]
-    fn extracts_id_from_direct_placement() {
-        // Direct-placement escape (what graphics.rs emits) also carries i=.
-        let payload = "\x1b_Ga=T,f=100,t=d,q=2,I=42,r=12,m=0;abcd\x1b\\";
-        // Note: this uses capital I (client ref), not lowercase i.
-        // extract_kitty_image_id should correctly NOT match capital I.
-        assert_eq!(extract_kitty_image_id(payload), None);
-    }
-
-    #[test]
-    fn returns_none_on_non_apc_payload() {
-        assert_eq!(extract_kitty_image_id("hello world"), None);
-        assert_eq!(extract_kitty_image_id(""), None);
-    }
-
-    #[test]
-    fn returns_none_on_unterminated_header() {
-        // No `;` terminating the header — malformed, shouldn't panic.
-        assert_eq!(extract_kitty_image_id("\x1b_Ga=T,i=5"), None);
-    }
-
-    #[test]
-    fn ignores_bad_integer() {
-        let payload = "\x1b_Ga=T,i=notanumber;abcd\x1b\\";
-        assert_eq!(extract_kitty_image_id(payload), None);
-    }
-
-    #[test]
-    fn handles_id_at_start_of_parameter_list() {
-        let payload = "\x1b_Gi=7,a=T,U=1;abcd\x1b\\";
-        assert_eq!(extract_kitty_image_id(payload), Some(7));
-    }
-}

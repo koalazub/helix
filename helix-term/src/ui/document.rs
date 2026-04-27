@@ -12,7 +12,7 @@ use helix_view::graphics::Rect;
 use helix_view::theme::Style;
 use helix_view::view::ViewPosition;
 use helix_view::{Document, Theme};
-use tui::buffer::Buffer as Surface;
+use tui::buffer::{Buffer as Surface, RawSurface};
 
 use crate::ui::text_decorations::DecorationManager;
 
@@ -30,6 +30,7 @@ pub struct LinePos {
 #[allow(clippy::too_many_arguments)]
 pub fn render_document(
     surface: &mut Surface,
+    raw: &mut RawSurface,
     viewport: Rect,
     doc: &Document,
     offset: ViewPosition,
@@ -41,6 +42,7 @@ pub fn render_document(
 ) {
     let mut renderer = TextRenderer::new(
         surface,
+        raw,
         doc,
         theme,
         Position::new(offset.vertical_offset, offset.horizontal_offset),
@@ -213,6 +215,7 @@ pub fn render_text(
 #[derive(Debug)]
 pub struct TextRenderer<'a> {
     surface: &'a mut Surface,
+    raw: &'a mut RawSurface,
     pub text_style: Style,
     pub whitespace_style: Style,
     pub indent_guide_char: String,
@@ -238,6 +241,7 @@ pub struct GraphemeStyle {
 impl<'a> TextRenderer<'a> {
     pub fn new(
         surface: &'a mut Surface,
+        raw: &'a mut RawSurface,
         doc: &Document,
         theme: &Theme,
         offset: Position,
@@ -286,6 +290,7 @@ impl<'a> TextRenderer<'a> {
 
         TextRenderer {
             surface,
+            raw,
             indent_guide_char: editor_config.indent_guides.character.into(),
             newline,
             nbsp,
@@ -390,8 +395,8 @@ impl<'a> TextRenderer<'a> {
         let viewport_bottom = self.viewport.y + self.viewport.height;
 
         if raw.uses_placeholders() {
-            self.surface
-                .write_raw_bytes(raw.id, screen_x, screen_y, &raw.payload);
+            self.raw
+                .write(raw.id, screen_x, screen_y, raw.payload.clone());
 
             // Kitty's Unicode placeholder protocol reads the SGR
             // foreground colour of each placeholder cell as a 24-bit
@@ -420,8 +425,8 @@ impl<'a> TextRenderer<'a> {
                 }
             }
         } else {
-            self.surface
-                .write_raw_bytes(raw.id, screen_x, screen_y, &raw.payload);
+            self.raw
+                .write(raw.id, screen_x, screen_y, raw.payload.clone());
         }
     }
 

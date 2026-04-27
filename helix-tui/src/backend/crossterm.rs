@@ -1,4 +1,9 @@
-use crate::{backend::Backend, buffer::Cell, terminal::Config};
+use crate::{
+    backend::Backend,
+    buffer::Cell,
+    graphics::{GraphicsProtocol, KittyProtocol},
+    terminal::Config,
+};
 use crossterm::{
     cursor::{Hide, MoveTo, SetCursorStyle, Show},
     event::{
@@ -301,7 +306,7 @@ where
         )
     }
 
-    fn draw_raw(&mut self, content: &[(u64, u16, u16, Vec<u8>)]) -> io::Result<()> {
+    fn draw_raw(&mut self, content: &[crate::buffer::RawWrite]) -> io::Result<()> {
         for (id, x, y, bytes) in content {
             queue!(self.buffer, MoveTo(*x, *y))?;
             self.buffer.write_all(bytes)?;
@@ -312,9 +317,7 @@ where
 
     fn delete_images(&mut self, ids: &[u64]) -> io::Result<()> {
         for id in ids {
-            // Kitty protocol: a=d (delete), d=I (by ID), i=<id>, q=2 (quiet)
-            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
-            self.buffer.write_all(delete_cmd.as_bytes())?;
+            KittyProtocol.write_delete(*id, &mut self.buffer)?;
             self.transmitted_images.remove(id);
         }
         Ok(())
@@ -322,8 +325,7 @@ where
 
     fn clear_all_images(&mut self) -> io::Result<()> {
         for id in self.transmitted_images.drain() {
-            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
-            self.buffer.write_all(delete_cmd.as_bytes())?;
+            KittyProtocol.write_delete(id, &mut self.buffer)?;
         }
         Ok(())
     }
@@ -347,8 +349,7 @@ where
             .copied()
             .collect();
         for id in &stale {
-            let delete_cmd = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", id);
-            self.buffer.write_all(delete_cmd.as_bytes())?;
+            KittyProtocol.write_delete(*id, &mut self.buffer)?;
             self.transmitted_images.remove(id);
         }
         Ok(stale)

@@ -1,7 +1,10 @@
 //! Terminal interface provided through the [Terminal] type.
 //! Frontend for [Backend]
 
-use crate::{backend::Backend, buffer::Buffer};
+use crate::{
+    backend::Backend,
+    buffer::{Buffer, RawSurface},
+};
 use helix_view::editor::{Config as EditorConfig, KittyKeyboardProtocolConfig};
 use helix_view::graphics::{CursorKind, Rect};
 use std::io;
@@ -65,6 +68,11 @@ where
     /// Holds the results of the current and previous draw calls. The two are compared at the end
     /// of each draw pass to output the necessary updates to the terminal
     buffers: [Buffer; 2],
+    /// Off-grid graphics state, parallel to `buffers` and indexed by
+    /// `current` in lockstep. Producers fill the active surface
+    /// during a frame; `flush` diffs current against previous to
+    /// decide which images need (re)transmission.
+    graphics: [RawSurface; 2],
     /// Index of the current buffer in the previous array
     current: usize,
     /// Kind of cursor (hidden or others)
@@ -108,6 +116,7 @@ where
                 Buffer::empty(options.viewport.area),
                 Buffer::empty(options.viewport.area),
             ],
+            graphics: [RawSurface::new(), RawSurface::new()],
             current: 0,
             cursor_kind: CursorKind::Block,
             viewport: options.viewport,
@@ -134,8 +143,26 @@ where
     //     }
     // }
 
-    pub fn current_buffer_mut(&mut self) -> &mut Buffer {
-        &mut self.buffers[self.current]
+    /// Combined mutable accessor for the active draw surfaces. Returns
+    /// `(cell grid, off-grid graphics)`. Used by the renderer to thread
+    /// both into compositor::Context without repeated `&mut self` calls.
+    ///
+    /// Deliberately the only buffer accessor — exposing a buffer-only
+    /// `current_buffer_mut` would let callers paint cells without
+    /// touching the parallel graphics surface, and that lockstep is
+    /// load-bearing for image diffing.
+    pub fn current_buffer_and_raw_mut(&mut self) -> (&mut Buffer, &mut RawSurface) {
+        let Self {
+            buffers,
+            graphics,
+            current,
+            ..
+        } = self;
+        (&mut buffers[*current], &mut graphics[*current])
+    }
+
+    pub fn current_raw_mut(&mut self) -> &mut RawSurface {
+        &mut self.graphics[self.current]
     }
 
     pub fn backend(&self) -> &B {
@@ -149,20 +176,14 @@ where
     pub fn flush(&mut self) -> io::Result<()> {
         let previous_buffer = &self.buffers[1 - self.current];
         let current_buffer = &self.buffers[self.current];
+        let previous_raw = &self.graphics[1 - self.current];
+        let current_raw = &self.graphics[self.current];
 
-        let current_image_ids: Vec<u64> = current_buffer
-            .raw_writes
-            .iter()
-            .map(|(id, _, _, _)| *id)
-            .collect();
+        let current_image_ids: Vec<u64> = current_raw.image_ids().collect();
 
         self.backend.sync_images(&current_image_ids)?;
 
-        let prev_image_ids: std::collections::HashSet<u64> = previous_buffer
-            .raw_writes
-            .iter()
-            .map(|(id, _, _, _)| *id)
-            .collect();
+        let prev_image_ids: std::collections::HashSet<u64> = previous_raw.image_ids().collect();
 
         // Image delete policy. This editor uses Kitty's Unicode
         // placeholder protocol (`U=1`) for inline plots — the image is
@@ -186,14 +207,14 @@ where
         // behavioural regression for any future direct-placement
         // (`a=T`) consumer that relied on auto-cleanup, but the old
         // path is deprecated and nothelix no longer uses it.
-        let to_delete: Vec<u64> = current_buffer.pending_deletes.clone();
+        let to_delete: Vec<u64> = current_raw.pending_deletes().to_vec();
 
         // Transmit virtual-placement images once on first sighting.
         // Position changes don't require retransmission because the
         // placeholder cells drive rendering, not the transmission's
         // anchor point.
-        let to_draw: Vec<&(u64, u16, u16, Vec<u8>)> = current_buffer
-            .raw_writes
+        let to_draw: Vec<&crate::buffer::RawWrite> = current_raw
+            .writes()
             .iter()
             .filter(|(id, _, _, _)| !prev_image_ids.contains(id))
             .collect();
@@ -212,7 +233,7 @@ where
         self.backend.draw(updates.into_iter())?;
 
         if !to_draw.is_empty() {
-            let draw_data: Vec<(u64, u16, u16, Vec<u8>)> = to_draw
+            let draw_data: Vec<crate::buffer::RawWrite> = to_draw
                 .into_iter()
                 .map(|(id, x, y, bytes)| (*id, *x, *y, bytes.clone()))
                 .collect();
@@ -273,8 +294,9 @@ where
             kind => self.show_cursor(kind)?,
         }
 
-        // Swap buffers
+        // Swap buffers and graphics surfaces in lockstep.
         self.buffers[1 - self.current].reset();
+        self.graphics[1 - self.current].clear();
         self.current = 1 - self.current;
 
         // Flush
@@ -306,8 +328,10 @@ where
     /// Clear the terminal and force a full redraw on the next draw call.
     pub fn clear(&mut self) -> io::Result<()> {
         self.backend.clear()?;
-        // Reset the back buffer to make sure the next update will redraw everything.
+        // Reset the back buffer + graphics so the next update will
+        // redraw everything (including retransmitting cached images).
         self.buffers[1 - self.current].reset();
+        self.graphics[1 - self.current].clear();
         Ok(())
     }
 

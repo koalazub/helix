@@ -81,6 +81,7 @@ impl EditorView {
         view: &View,
         viewport: Rect,
         surface: &mut Surface,
+        raw: &mut tui::buffer::RawSurface,
         is_focused: bool,
     ) {
         let inner = view.inner_area(doc);
@@ -210,11 +211,12 @@ impl EditorView {
         // fraction numerator/denominator rows, etc.). Only registers when
         // the Document actually has entries so the decoration pipeline
         // isn't visited when nothing is pending.
-        if !doc.math_lines_above.is_empty() || !doc.math_lines_below.is_empty() {
+        if !doc.math_lines().is_empty() {
             decorations.add_decoration(text_decorations::MathAnnotations::new(doc, theme));
         }
         render_document(
             surface,
+            raw,
             inner,
             doc,
             view_offset,
@@ -1501,6 +1503,7 @@ impl Component for EditorView {
                                         editor: cx.editor,
                                         jobs: cx.jobs,
                                         scroll: None,
+                                        raw: None,
                                     };
 
                                     if let EventResult::Consumed(callback) =
@@ -1652,7 +1655,11 @@ impl Component for EditorView {
 
         for (view, is_focused) in cx.editor.tree.views() {
             let doc = cx.editor.document(view.doc).unwrap();
-            self.render_view(cx.editor, doc, view, area, surface, is_focused);
+            let raw = cx
+                .raw
+                .as_deref_mut()
+                .expect("raw surface must be present during render");
+            self.render_view(cx.editor, doc, view, area, surface, raw, is_focused);
         }
 
         if config.auto_info {

@@ -154,16 +154,11 @@ pub struct Document {
     /// Plugin-managed overlays for text concealment (e.g., LaTeX symbol rendering).
     /// Unlike jump_labels which are transient, these persist until explicitly cleared.
     pub plugin_overlays: HashMap<ViewId, Vec<Overlay>>,
-    /// Plugin-managed virtual lines that render ABOVE a given source line.
-    /// Keyed by 0-based source line index; each entry is a list of pre-padded
-    /// virtual-line strings (the plugin is responsible for leading whitespace
-    /// so limits align with their operator's column). Used by the nothelix
-    /// math renderer to place `\int_0^1` → `1` above, `0` below, keeping the
-    /// original source line intact.
-    pub math_lines_above: HashMap<usize, Vec<String>>,
-    /// Plugin-managed virtual lines that render BELOW a given source line.
-    /// Mirror of `math_lines_above`, same keying and alignment rules.
-    pub math_lines_below: HashMap<usize, Vec<String>>,
+    /// Plugin-managed virtual lines rendered around math-bearing source
+    /// lines. Mutate through [`Self::set_math_lines_above`] /
+    /// [`Self::set_math_lines_below`] / [`Self::clear_math_lines`] /
+    /// [`Self::clear_all_math_lines`]; read through [`Self::math_lines`].
+    math_lines: crate::annotations::math::MathLines,
     /// LSP document highlights for each view, stored as char ranges.
     pub(crate) document_highlights: HashMap<ViewId, DocumentHighlights>,
     /// Set to `true` when the document is updated, reset to `false` on the next inlay hints
@@ -232,8 +227,14 @@ pub struct Document {
     // large refactor that would make `&mut Editor` available on the `DocumentDidChange` event.
     pub color_swatch_controller: TaskController,
 
-    /// Raw content annotations (inline images, etc.) by view
-    pub(crate) raw_content: HashMap<ViewId, Vec<helix_core::text_annotations::RawContent>>,
+    /// Raw content annotations (inline images, etc.) by view. The
+    /// per-view storage is a `SortedRawContent` — the sort-by-`char_idx`
+    /// invariant the layer iterator in `text_annotations::Layer` relies
+    /// on is enforced by the *type*, not by convention. Outside readers
+    /// go through [`Self::raw_content_for_view`]; outside writers
+    /// through `add_raw_content` / `add_or_replace_raw_content` /
+    /// `set_raw_content` / `clear_raw_content`.
+    raw_content: HashMap<ViewId, helix_core::text_annotations::SortedRawContent>,
 
     pub uri: Option<Box<Url>>,
 
@@ -778,8 +779,7 @@ impl Document {
             readonly: false,
             jump_labels: HashMap::new(),
             plugin_overlays: HashMap::new(),
-            math_lines_above: HashMap::new(),
-            math_lines_below: HashMap::new(),
+            math_lines: crate::annotations::math::MathLines::default(),
             raw_content: HashMap::new(),
             document_highlights: HashMap::new(),
             color_swatches: None,
@@ -1646,22 +1646,11 @@ impl Document {
             if raw_contents.is_empty() {
                 continue;
             }
-            // (1) drop anything whose pre-transaction char_idx was out of
-            // bounds — update_positions would panic on it.
-            raw_contents.retain(|rc| rc.char_idx <= old_len);
-
-            // (2) ensure sorted by char_idx before the remap.
-            raw_contents.sort_by_key(|rc| rc.char_idx);
-
-            changes.update_positions(
-                raw_contents
-                    .iter_mut()
-                    .map(|rc| (&mut rc.char_idx, Assoc::After)),
-            );
-
-            // (3) post-filter + re-sort.
-            raw_contents.retain(|rc| rc.char_idx <= new_len);
-            raw_contents.sort_by_key(|rc| rc.char_idx);
+            raw_contents.remap_positions(old_len, new_len, |rcs| {
+                changes.update_positions(
+                    rcs.iter_mut().map(|rc| (&mut rc.char_idx, Assoc::After)),
+                );
+            });
         }
 
         for highlights in self.document_highlights.values_mut() {
@@ -2484,10 +2473,7 @@ impl Document {
         view_id: ViewId,
         content: helix_core::text_annotations::RawContent,
     ) {
-        let entry = self.raw_content.entry(view_id).or_insert_with(Vec::new);
-        entry.push(content);
-        // Preserve the sort-by-char_idx invariant the layer iterator relies on.
-        entry.sort_by_key(|rc| rc.char_idx);
+        self.raw_content.entry(view_id).or_default().push(content);
     }
 
     /// Add raw content, replacing any existing entry that shares the same
@@ -2519,20 +2505,20 @@ impl Document {
         view_id: ViewId,
         content: helix_core::text_annotations::RawContent,
     ) {
-        let entry = self.raw_content.entry(view_id).or_insert_with(Vec::new);
-        let new_id = content.id;
-        entry.retain(|rc| rc.id != new_id);
-        entry.push(content);
-        entry.sort_by_key(|rc| rc.char_idx);
+        self.raw_content
+            .entry(view_id)
+            .or_default()
+            .replace_by_id(content);
     }
 
     pub fn set_raw_content(
         &mut self,
         view_id: ViewId,
-        mut content: Vec<helix_core::text_annotations::RawContent>,
+        content: Vec<helix_core::text_annotations::RawContent>,
     ) {
-        content.sort_by_key(|rc| rc.char_idx);
-        self.raw_content.insert(view_id, content);
+        let mut entry = helix_core::text_annotations::SortedRawContent::new();
+        entry.set(content);
+        self.raw_content.insert(view_id, entry);
     }
 
     pub fn clear_raw_content(&mut self, view_id: ViewId) {
@@ -2553,36 +2539,42 @@ impl Document {
     /// row immediately above the source line, index 1 is the row above that,
     /// and so on.
     pub fn set_math_lines_above(&mut self, line_idx: usize, lines: Vec<String>) {
-        if lines.is_empty() {
-            self.math_lines_above.remove(&line_idx);
-        } else {
-            self.math_lines_above.insert(line_idx, lines);
-        }
+        self.math_lines.set_above(line_idx, lines);
     }
 
     /// Register `lines` to render BELOW source line `line_idx`. Ordering
     /// follows the same row-away convention as [`Self::set_math_lines_above`].
     pub fn set_math_lines_below(&mut self, line_idx: usize, lines: Vec<String>) {
-        if lines.is_empty() {
-            self.math_lines_below.remove(&line_idx);
-        } else {
-            self.math_lines_below.insert(line_idx, lines);
-        }
+        self.math_lines.set_below(line_idx, lines);
     }
 
     /// Drop both above- and below-line math annotations for a single source
     /// line.
     pub fn clear_math_lines(&mut self, line_idx: usize) {
-        self.math_lines_above.remove(&line_idx);
-        self.math_lines_below.remove(&line_idx);
+        self.math_lines.clear_at(line_idx);
     }
 
     /// Wipe every math annotation registered on this document. Called by the
     /// nothelix plugin when it re-runs the math renderer from scratch (e.g.
     /// after a buffer edit or on explicit `:math-render-clear`).
     pub fn clear_all_math_lines(&mut self) {
-        self.math_lines_above.clear();
-        self.math_lines_below.clear();
+        self.math_lines.clear();
+    }
+
+    /// Read-only access to the document's math line annotations.
+    pub fn math_lines(&self) -> &crate::annotations::math::MathLines {
+        &self.math_lines
+    }
+
+    /// Raw content (inline images, etc.) registered on `view_id`,
+    /// sorted by `char_idx`. `None` if the view has no entries.
+    pub fn raw_content_for_view(
+        &self,
+        view_id: ViewId,
+    ) -> Option<&[helix_core::text_annotations::RawContent]> {
+        self.raw_content
+            .get(&view_id)
+            .map(|entries| entries.as_slice())
     }
 
     pub fn set_document_highlights(

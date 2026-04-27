@@ -28,10 +28,9 @@
 //! <math_lines_below[N] rows>
 //! ```
 
-use std::collections::HashMap;
-
 use helix_core::text_annotations::LineAnnotation;
 use helix_core::Position;
+use helix_view::annotations::math::MathLines;
 use helix_view::theme::Style;
 use helix_view::{Document, Theme};
 
@@ -39,8 +38,7 @@ use crate::ui::document::{LinePos, TextRenderer};
 use crate::ui::text_decorations::Decoration;
 
 pub struct MathAnnotations<'a> {
-    above: &'a HashMap<usize, Vec<String>>,
-    below: &'a HashMap<usize, Vec<String>>,
+    lines: &'a MathLines,
     style: Style,
 }
 
@@ -55,23 +53,9 @@ impl<'a> MathAnnotations<'a> {
             style
         };
         Self {
-            above: &doc.math_lines_above,
-            below: &doc.math_lines_below,
+            lines: doc.math_lines(),
             style,
         }
-    }
-
-    /// Total virtual rows reserved after `doc_line` completes rendering:
-    /// that line's own `below` bucket, plus the *next* line's `above`
-    /// bucket emulated here.
-    fn reserved_rows(&self, doc_line: usize) -> usize {
-        let below_here = self.below.get(&doc_line).map(Vec::len).unwrap_or(0);
-        let above_next = self
-            .above
-            .get(&(doc_line + 1))
-            .map(Vec::len)
-            .unwrap_or(0);
-        below_here + above_next
     }
 }
 
@@ -82,7 +66,7 @@ impl LineAnnotation for MathAnnotations<'_> {
         _line_end_visual_pos: Position,
         doc_line: usize,
     ) -> Position {
-        Position::new(self.reserved_rows(doc_line), 0)
+        Position::new(self.lines.rows_to_reserve_after(doc_line), 0)
     }
 }
 
@@ -93,12 +77,8 @@ impl Decoration for MathAnnotations<'_> {
         pos: LinePos,
         virt_off: Position,
     ) -> Position {
-        let below = self.below.get(&pos.doc_line).map(Vec::as_slice).unwrap_or(&[]);
-        let above_next = self
-            .above
-            .get(&(pos.doc_line + 1))
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
+        let below = self.lines.below(pos.doc_line).unwrap_or(&[]);
+        let above_next = self.lines.above(pos.doc_line + 1).unwrap_or(&[]);
 
         if below.is_empty() && above_next.is_empty() {
             return Position::new(0, 0);

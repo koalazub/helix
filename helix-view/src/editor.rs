@@ -471,27 +471,7 @@ impl PickerStartPosition {
     }
 }
 
-/// Configuration for animation-aware rendering behaviour.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct AnimationConfig {
-    /// Target redraw interval while an animated overlay is on screen, in
-    /// milliseconds.  Defaults to 16 ms (~60 fps).  Values below 8 ms are
-    /// clamped to 8 ms at runtime to avoid runaway CPU use.
-    pub redraw_interval_ms: u64,
-    /// Maximum frames-per-second for animated overlays.  Informational only;
-    /// the effective cap comes from `redraw_interval_ms`.
-    pub max_fps: u32,
-}
-
-impl Default for AnimationConfig {
-    fn default() -> Self {
-        Self {
-            redraw_interval_ms: 16, // ~60 fps
-            max_fps: 60,
-        }
-    }
-}
+pub use crate::animation::AnimationConfig;
 
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "kebab-case")]
@@ -2388,14 +2368,12 @@ impl Editor {
                 _ = helix_event::redraw_requested() => {
                     if  !self.needs_redraw{
                         self.needs_redraw = true;
-                        let interval_ms = if self.any_doc_has_animating_content() {
-                            // Use configured animation interval, with a floor of 8 ms (~120 fps)
-                            // to guard against runaway CPU use if misconfigured.
-                            self.config().animation.redraw_interval_ms.max(8)
-                        } else {
-                            33
-                        };
-                        let timeout = Instant::now() + Duration::from_millis(interval_ms);
+                        let config = self.config();
+                        let orchestrator =
+                            crate::animation::AnimationOrchestrator::new(&config.animation);
+                        let interval =
+                            orchestrator.next_interval(self.any_doc_has_animating_content());
+                        let timeout = Instant::now() + interval;
                         if timeout < self.idle_timer.deadline() && timeout < self.redraw_timer.deadline(){
                             self.redraw_timer.as_mut().reset(timeout)
                         }

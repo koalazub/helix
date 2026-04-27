@@ -293,46 +293,37 @@ impl Application {
             self.compositor.full_redraw = false;
         }
 
-        let mut cx = crate::compositor::Context {
-            editor: &mut self.editor,
-            jobs: &mut self.jobs,
-            scroll: None,
-        };
-
         helix_event::start_frame();
-        cx.editor.needs_redraw = false;
+        self.editor.needs_redraw = false;
 
         let area = self
             .terminal
             .autoresize()
             .expect("Unable to determine terminal size");
 
-        // TODO: need to recalculate view tree if necessary
-
         // Drain viewport-dirty flags and dispatch ViewportChanged once per
-        // changed view per frame.  We use a two-pass collect to satisfy the
-        // borrow checker (can't hold &mut View and &Document at the same time
-        // through the tree iterator).  Running this after autoresize() ensures
-        // the snapshot reflects post-resize geometry, so height changes are not
-        // lagged by one frame.
+        // changed view per frame. Two-pass collect satisfies the borrow
+        // checker (can't hold &mut View and &Document at the same time
+        // through the tree iterator). Done after autoresize() so the
+        // snapshot reflects post-resize geometry, and before acquiring
+        // the terminal's draw surfaces so the editor borrow finishes
+        // before the Context borrow begins.
         {
             use helix_view::events::ViewportChanged;
-            // Pass 1: collect what each view currently looks like.
             let mut snapshot: Vec<(helix_view::ViewId, helix_view::DocumentId, usize, u16)> =
                 Vec::new();
-            for (view, _) in cx.editor.tree.views() {
+            for (view, _) in self.editor.tree.views() {
                 let doc_id = view.doc;
-                if let Some(doc) = cx.editor.documents.get(&doc_id) {
+                if let Some(doc) = self.editor.documents.get(&doc_id) {
                     let anchor = doc.view_offset(view.id).anchor;
                     let height = view.inner_area(doc).height;
                     snapshot.push((view.id, doc_id, anchor, height));
                 }
             }
-            // Pass 2: compare against last-seen values; dispatch if changed.
             let mut to_dispatch: Vec<(helix_view::ViewId, helix_view::DocumentId, usize, u16)> =
                 Vec::new();
             for &(view_id, doc_id, anchor, height) in &snapshot {
-                let view = cx.editor.tree.get_mut(view_id);
+                let view = self.editor.tree.get_mut(view_id);
                 if anchor != view.last_viewport_anchor || height != view.last_viewport_height {
                     view.last_viewport_anchor = anchor;
                     view.last_viewport_height = height;
@@ -349,7 +340,13 @@ impl Application {
             }
         }
 
-        let surface = self.terminal.current_buffer_mut();
+        let (surface, raw) = self.terminal.current_buffer_and_raw_mut();
+        let mut cx = crate::compositor::Context {
+            editor: &mut self.editor,
+            jobs: &mut self.jobs,
+            scroll: None,
+            raw: Some(raw),
+        };
 
         self.compositor.render(area, surface, &mut cx);
         let (pos, kind) = self.compositor.cursor(area, &self.editor);
@@ -668,6 +665,7 @@ impl Application {
             editor: &mut self.editor,
             jobs: &mut self.jobs,
             scroll: None,
+            raw: None,
         };
         let should_render = self.compositor.handle_event(&Event::IdleTimeout, &mut cx);
         if should_render || self.editor.needs_redraw {
@@ -792,6 +790,7 @@ impl Application {
             editor: &mut self.editor,
             jobs: &mut self.jobs,
             scroll: None,
+            raw: None,
         };
         // Handle key events
         let should_redraw = match event.unwrap() {
@@ -1051,6 +1050,7 @@ impl Application {
                             editor: &mut self.editor,
                             scroll: None,
                             jobs: &mut self.jobs,
+                            raw: None,
                         };
 
                         ScriptingEngine::handle_lsp_call(
@@ -1219,6 +1219,7 @@ impl Application {
                             editor: &mut self.editor,
                             scroll: None,
                             jobs: &mut self.jobs,
+                            raw: None,
                         };
 
                         let reply = ScriptingEngine::handle_lsp_call(

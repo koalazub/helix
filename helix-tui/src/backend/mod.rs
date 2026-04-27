@@ -36,8 +36,9 @@ pub trait Backend {
         I: Iterator<Item = (u16, u16, &'a Cell)>;
     /// Draws raw bytes to the terminal (for inline images, graphics protocols, etc.)
     /// Format: (id, x, y, bytes) - id is used for diffing at the Terminal level.
-    /// Default implementation does nothing - backends override if they support raw output.
-    fn draw_raw(&mut self, _content: &[(u64, u16, u16, Vec<u8>)]) -> Result<(), io::Error> {
+    /// Bytes are `Arc`-shared with `RawContent::payload` to avoid
+    /// per-frame copies. Default implementation does nothing.
+    fn draw_raw(&mut self, _content: &[crate::buffer::RawWrite]) -> Result<(), io::Error> {
         Ok(())
     }
     /// Deletes images that have scrolled out of viewport.

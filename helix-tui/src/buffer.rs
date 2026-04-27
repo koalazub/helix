@@ -1,4 +1,7 @@
 //! Contents of a terminal screen. A [Buffer] is made up of [Cell]s.
+mod raw_surface;
+pub use raw_surface::{RawSurface, RawWrite};
+
 use crate::text::{Span, Spans};
 use helix_core::unicode::width::UnicodeWidthStr;
 use std::cmp::min;
@@ -131,8 +134,6 @@ impl Default for Cell {
 pub struct Buffer {
     pub area: Rect,
     pub content: Vec<Cell>,
-    pub raw_writes: Vec<(u64, u16, u16, Vec<u8>)>,
-    pub pending_deletes: Vec<u64>,
 }
 
 impl Buffer {
@@ -147,12 +148,7 @@ impl Buffer {
     pub fn filled(area: Rect, cell: &Cell) -> Buffer {
         let size = area.area();
         let content = vec![cell.clone(); size];
-        Buffer {
-            area,
-            content,
-            raw_writes: Vec::new(),
-            pending_deletes: Vec::new(),
-        }
+        Buffer { area, content }
     }
 
     /// Returns a Buffer containing the given lines
@@ -292,16 +288,6 @@ impl Buffer {
             (self.area.x as usize + (i % self.area.width as usize)) as u16,
             (self.area.y as usize + (i / self.area.width as usize)) as u16,
         )
-    }
-
-    pub fn write_raw_bytes(&mut self, id: u64, x: u16, y: u16, bytes: &[u8]) {
-        self.raw_writes.push((id, x, y, bytes.to_vec()));
-    }
-
-    pub fn delete_raw_image(&mut self, id: u64) {
-        if !self.pending_deletes.contains(&id) {
-            self.pending_deletes.push(id);
-        }
     }
 
     /// Print a string, starting at the position (x, y)
@@ -627,8 +613,6 @@ impl Buffer {
         for c in &mut self.content {
             c.reset();
         }
-        self.raw_writes.clear();
-        self.pending_deletes.clear();
     }
 
     /// Clear an area in the buffer

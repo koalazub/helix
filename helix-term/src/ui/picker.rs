@@ -1008,8 +1008,13 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
                 decorations.add_decoration(draw_highlight);
             }
 
+            let raw = cx
+                .raw
+                .as_deref_mut()
+                .expect("raw surface must be present during render");
             render_document(
                 surface,
+                raw,
                 inner,
                 doc,
                 offset,

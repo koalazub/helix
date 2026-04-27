@@ -528,12 +528,12 @@ impl View {
         // Reserve virtual rows for plugin-staged math layouts (integral
         // limits, fraction stacks, etc.). The actual painting happens in
         // helix_term::ui::text_decorations::MathAnnotations.
-        if !doc.math_lines_above.is_empty() || !doc.math_lines_below.is_empty() {
+        if !doc.math_lines().is_empty() {
             text_annotations.add_line_annotation(MathAnnotations::new(doc));
         }
 
         // Add raw content (inline images, etc.)
-        if let Some(raw_content) = doc.raw_content.get(&self.id) {
+        if let Some(raw_content) = doc.raw_content_for_view(self.id) {
             if !raw_content.is_empty() {
                 log::trace!(
                     "text_annotations: adding {} raw_content entries for view {:?}",

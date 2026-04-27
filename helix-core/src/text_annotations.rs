@@ -178,12 +178,110 @@ impl RawContent {
     }
 }
 
-// CRITICAL: ID-based equality for fast diffing
+/// A list of [`RawContent`] guaranteed sorted by `char_idx` ascending.
+///
+/// The doc-formatter's `Layer<RawContent>` calls `partition_point` on
+/// the underlying slice — that lookup is only correct on a sorted
+/// slice. Wrapping the storage in this type makes the invariant
+/// type-level: every mutator re-sorts before returning, and external
+/// readers see only a `&[RawContent]` view.
+///
+/// Identity-by-`id` (see `PartialEq` below) is what the `replace_by_id`
+/// path keys on; ordering is independent and only positional.
+#[derive(Debug, Default, Clone)]
+pub struct SortedRawContent(Vec<RawContent>);
+
+impl SortedRawContent {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn as_slice(&self) -> &[RawContent] {
+        &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, RawContent> {
+        self.0.iter()
+    }
+
+    /// Append a new entry, re-sorting after.
+    pub fn push(&mut self, rc: RawContent) {
+        self.0.push(rc);
+        self.0.sort_by_key(|rc| rc.char_idx);
+    }
+
+    /// Idempotent insert: drops any existing entry with the same `id`
+    /// (regardless of `char_idx`) before appending. This is what
+    /// notebook-cell re-execution wants — one image per cell, replace
+    /// in place even if the surrounding edits drifted the position.
+    pub fn replace_by_id(&mut self, rc: RawContent) {
+        let id = rc.id;
+        self.0.retain(|existing| existing.id != id);
+        self.push(rc);
+    }
+
+    /// Replace contents wholesale. Sorts the supplied vector before
+    /// taking ownership.
+    pub fn set(&mut self, mut content: Vec<RawContent>) {
+        content.sort_by_key(|rc| rc.char_idx);
+        self.0 = content;
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// `Vec::retain`. The retain operation cannot reorder remaining
+    /// entries, so the sort invariant survives without an extra sort.
+    pub fn retain<F: FnMut(&RawContent) -> bool>(&mut self, f: F) {
+        self.0.retain(f);
+    }
+
+    /// Run a buffer-edit position remap. The closure receives the
+    /// underlying mutable slice so it can hand each entry's
+    /// `char_idx` to a `ChangeSet::update_positions` (or equivalent)
+    /// alongside the side it should track. The wrapper trims entries
+    /// that fell outside `[0, old_len]` *before* the remap and
+    /// `[0, new_len]` *after*, then re-sorts — exactly the procedure
+    /// the doc layer needs and nothing else.
+    pub fn remap_positions<F: FnOnce(&mut [RawContent])>(
+        &mut self,
+        old_len: usize,
+        new_len: usize,
+        remap: F,
+    ) {
+        self.0.retain(|rc| rc.char_idx <= old_len);
+        self.0.sort_by_key(|rc| rc.char_idx);
+        remap(&mut self.0);
+        self.0.retain(|rc| rc.char_idx <= new_len);
+        self.0.sort_by_key(|rc| rc.char_idx);
+    }
+}
+
+// Identity = `id` only.
+//
+// `id` is the protocol-level cache key (e.g. Kitty image id). Two
+// records with the same id refer to the same logical image; their
+// char_idx may drift across edits because the position-remap loop in
+// `Document::apply_impl` slides annotations as bytes are inserted or
+// deleted, but they remain "the same image".
+//
+// `Document::add_or_replace_raw_content` dedupes on `id` alone for the
+// same reason — re-executing a notebook cell at a slightly different
+// char_idx must replace the previous record, not stack a duplicate.
+// PartialEq must agree, otherwise HashSet/Vec::contains callers see
+// "different" records that the dedup path collapses.
 impl PartialEq for RawContent {
     fn eq(&self, other: &Self) -> bool {
-        // Compare IDs only, NOT payload
-        // This makes diffing O(1) instead of O(n) where n = image size
-        self.id == other.id && self.char_idx == other.char_idx
+        self.id == other.id
     }
 }
 
@@ -192,7 +290,6 @@ impl Eq for RawContent {}
 impl std::hash::Hash for RawContent {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
-        self.char_idx.hash(state);
     }
 }
 

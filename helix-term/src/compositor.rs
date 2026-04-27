@@ -4,7 +4,7 @@
 use helix_core::Position;
 use helix_view::graphics::{CursorKind, Rect};
 
-use tui::buffer::Buffer as Surface;
+use tui::buffer::{Buffer as Surface, RawSurface};
 
 pub type Callback = Box<dyn FnOnce(&mut Compositor, &mut Context)>;
 pub type SyncCallback = Box<dyn FnOnce(&mut Compositor, &mut Context) + Sync>;
@@ -26,6 +26,12 @@ pub struct Context<'a> {
     pub editor: &'a mut Editor,
     pub scroll: Option<usize>,
     pub jobs: &'a mut Jobs,
+    /// Off-grid graphics surface for the active frame. Components
+    /// emitting inline images (Kitty/sixel/iTerm2) write here; the
+    /// `Buffer` itself stays a pure cell grid. `Some` during a render
+    /// pass, `None` while handling events — event handlers do not
+    /// emit graphics.
+    pub raw: Option<&'a mut RawSurface>,
 }
 
 impl Context<'_> {

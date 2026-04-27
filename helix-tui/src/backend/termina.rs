@@ -16,7 +16,11 @@ use termina::{
     Event, OneBased, PlatformTerminal, Terminal as _, WindowSize,
 };
 
-use crate::{buffer::Cell, terminal::Config};
+use crate::{
+    buffer::Cell,
+    graphics::{GraphicsProtocol, KittyProtocol},
+    terminal::Config,
+};
 
 use super::Backend;
 
@@ -613,7 +617,7 @@ impl Backend for TerminaBackend {
         Ok(Rect::new(0, 0, cols, rows))
     }
 
-    fn draw_raw(&mut self, content: &[(u64, u16, u16, Vec<u8>)]) -> io::Result<()> {
+    fn draw_raw(&mut self, content: &[crate::buffer::RawWrite]) -> io::Result<()> {
         use std::io::Write;
 
         for (id, x, y, bytes) in content {
@@ -631,7 +635,7 @@ impl Backend for TerminaBackend {
         use std::io::Write;
 
         for id in ids {
-            write!(self.terminal, "\x1b_Ga=d,d=I,i={},q=2\x1b\\", id)?;
+            KittyProtocol.write_delete(*id, &mut self.terminal)?;
             self.transmitted_images.remove(id);
         }
         if !ids.is_empty() {
@@ -641,10 +645,8 @@ impl Backend for TerminaBackend {
     }
 
     fn clear_all_images(&mut self) -> io::Result<()> {
-        use std::io::Write;
-
         for id in self.transmitted_images.drain() {
-            write!(self.terminal, "\x1b_Ga=d,d=I,i={},q=2\x1b\\", id)?;
+            KittyProtocol.write_delete(id, &mut self.terminal)?;
         }
         Ok(())
     }
@@ -662,7 +664,7 @@ impl Backend for TerminaBackend {
             .collect();
 
         for id in &stale {
-            write!(self.terminal, "\x1b_Ga=d,d=I,i={},q=2\x1b\\", id)?;
+            KittyProtocol.write_delete(*id, &mut self.terminal)?;
             self.transmitted_images.remove(id);
         }
 
