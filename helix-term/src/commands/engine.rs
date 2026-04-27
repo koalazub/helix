@@ -110,6 +110,7 @@ impl ScriptingEngine {
         event_reader: TerminalEventReaderHandle,
     ) {
         // Set up a flag to disable steel, even on the current build?
+        #[allow(clippy::if_same_then_else, reason = "not the same with steel feature")]
         if configuration.load().editor.enable_steel {
             PLUGIN_PRECEDENCE
                 .set(vec![
@@ -227,6 +228,22 @@ impl ScriptingEngine {
             manual_dispatch!(kind, generate_sources())
         }
     }
+
+    pub fn function_exists(ident: &str) -> bool {
+        for kind in plugins() {
+            if manual_dispatch!(kind, function_exists(ident)) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn shutdown() {
+        for kind in plugins() {
+            manual_dispatch!(kind, shutdown());
+        }
+    }
 }
 
 impl PluginSystem for NoEngine {
@@ -322,4 +339,10 @@ pub trait PluginSystem {
     }
 
     fn generate_sources(&self) {}
+
+    fn function_exists(&self, _: &str) -> bool {
+        false
+    }
+
+    fn shutdown(&self) {}
 }

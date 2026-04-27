@@ -431,6 +431,7 @@ pub struct Config {
     pub rainbow_brackets: bool,
     /// Whether to enable Kitty Keyboard Protocol
     pub kitty_keyboard_protocol: KittyKeyboardProtocolConfig,
+
     pub buffer_picker: BufferPickerConfig,
 
     /// Whether or not to use steel for configuration. Defaults to `true`. If set to `false`,
@@ -1171,13 +1172,10 @@ impl Default for Config {
             rainbow_brackets: false,
             kitty_keyboard_protocol: Default::default(),
             buffer_picker: BufferPickerConfig::default(),
-
             #[cfg(feature = "steel")]
             enable_steel: true,
-
             #[cfg(not(feature = "steel"))]
             enable_steel: false,
-
             insecure: false,
             animation: AnimationConfig::default(),
         }

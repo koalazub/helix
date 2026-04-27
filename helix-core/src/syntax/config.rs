@@ -117,9 +117,9 @@ pub type RootMarkers = GlobSet;
 /// A wrapper around `globset::GlobSet` which implements `Serialize` and `Deserialize`.
 #[derive(Default, Debug, Clone)]
 pub struct GlobSet {
-    inner: globset::GlobSet,
+    pub inner: globset::GlobSet,
     /// Glob patterns as-is before building. This is only used for `Serialize`.
-    patterns: Vec<String>,
+    pub patterns: Vec<String>,
 }
 
 impl GlobSet {

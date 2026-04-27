@@ -1445,6 +1445,8 @@ impl Application {
 
         let close_errs = self.close().await;
 
+        ScriptingEngine::shutdown();
+
         self.restore_term()?;
 
         for err in close_errs {

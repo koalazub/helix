@@ -104,6 +104,7 @@
          ui.background
          ui.background.separator
          ui.cursor
+         ui.cursor.normal
          ui.cursor.insert
          ui.cursor.select
          ui.cursor.match
@@ -132,9 +133,11 @@
          ui.window
          ui.help
          ui.text
+         ui.text.directory
          ui.text.focus
          ui.text.inactive
          ui.text.info
+         ui.virtual
          ui.virtual.ruler
          ui.virtual.whitespace
          ui.virtual.indent-guide
@@ -170,12 +173,19 @@
          register-theme
          theme-style
          theme-set-style!
-         string->color)
+         string->color
+         get-theme-by-name
+         current-theme
+         current-theme-name)
 
 ;;@doc
 ;; Register this theme with helix for use
 (define (register-theme theme)
   (add-theme! *helix.cx* theme))
+
+;;@doc
+;; Fetch a theme by name. Returns #false if the theme does not exist
+(define get-theme-by-name get-theme)
 
 (define-syntax theme-func
   (syntax-rules ()
@@ -342,9 +352,11 @@
 (theme-func ui.window "Borderline separating splits")
 (theme-func ui.help "Description box for commands")
 (theme-func ui.text "Default text style, command prompts, popup text, etc.")
+(theme-func ui.text.directory "Directory names in prompt completion")
 (theme-func ui.text.focus "The currently selected line in the picker")
 (theme-func ui.text.inactive "Same as ui.text but when the text is inactive (e.g. suggestions)")
 (theme-func ui.text.info "The key: command text in ui.popup.info boxes")
+(theme-func ui.virtual)
 (theme-func ui.virtual.ruler "Ruler columns (see the editor.rules config)")
 (theme-func ui.virtual.whitespace "Visible whitespace characters")
 (theme-func ui.virtual.indent-guide "Vertical indent width guides")
