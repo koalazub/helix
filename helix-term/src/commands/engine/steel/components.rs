@@ -190,6 +190,7 @@ pub fn helix_component_module(generate_sources: bool) -> BuiltInModule {
                         editor: ctx.editor,
                         scroll: None,
                         jobs: ctx.jobs,
+                        raw: None,
                     };
 
                     inner.render(area, frame, &mut ctx);

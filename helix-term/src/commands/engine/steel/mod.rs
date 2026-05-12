@@ -22,7 +22,7 @@ use helix_core::{
 };
 use helix_event::register_hook;
 use helix_lsp::jsonrpc;
-use helix_tui::graphics::{GraphicsProtocol, KittyProtocol};
+use tui::graphics::{GraphicsProtocol, KittyProtocol};
 use helix_view::{
     annotations::diagnostics::DiagnosticFilter,
     document::{DocumentInlayHints, DocumentInlayHintsId, Mode},
@@ -607,6 +607,7 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
                 editor: cx.editor,
                 scroll: None,
                 jobs: cx.jobs,
+                raw: None,
             };
 
             (command.fun)(&mut cx, Args::default(), PromptEvent::Validate)
@@ -672,6 +673,30 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
         .register_fn_with_ctx(CTX, "get-helix-cwd", get_helix_cwd)
         .register_fn_with_ctx(CTX, "move-window-far-left", move_window_to_the_left)
         .register_fn_with_ctx(CTX, "move-window-far-right", move_window_to_the_right);
+
+    let mut template_function_arity_1 = |name: &str, doc: &str| {
+        if generate_sources {
+            let docstring = format_docstring(doc);
+
+            builtin_static_command_module.push_str(&format!(
+                r#"
+(provide {})
+;;@doc
+{}
+(define ({} arg)
+    (helix.static.{} *helix.cx* arg))
+"#,
+                name, docstring, name, name
+            ));
+        }
+    };
+
+    macro_rules! function1 {
+        ($name:expr, $function:expr, $doc:expr) => {{
+            module.register_fn($name, $function);
+            template_function_arity_1($name, $doc);
+        }};
+    }
 
     function1!(
         "set-current-selection-object!",
@@ -1051,13 +1076,6 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
             std::fs::write(target_directory, &builtin_static_command_module).unwrap();
         }
 
-        engine.register_steel_module(
-            "helix/static.scm".to_string(),
-            builtin_static_command_module,
-        );
-    }
-
-    if generate_sources {
         generate_module("static.scm", &builtin_static_command_module);
         configure_lsp_builtins("static", &module);
     }
@@ -1115,6 +1133,7 @@ fn load_typed_commands(engine: &mut Engine, generate_sources: bool) {
                 editor: cx.editor,
                 scroll: None,
                 jobs: cx.jobs,
+                raw: None,
             };
 
             let mut verified_args = Args::new(command.signature, true);
@@ -2296,6 +2315,7 @@ fn patch_callbacks(ctx: &mut Context<'_>) {
                             editor,
                             scroll: None,
                             jobs,
+                            raw: None,
                         },
                     )
                 },
@@ -4036,6 +4056,7 @@ fn construct_callback<const N: usize>(
             editor,
             jobs,
             scroll: None,
+            raw: None,
         };
         let mut ctx = with_context_guard(&mut compositor_context);
 
@@ -4580,7 +4601,6 @@ fn load_treesitter_api(engine: &mut Engine, generate_sources: bool) {
 
 fn load_misc_api(engine: &mut Engine, generate_sources: bool) {
     let mut module = BuiltInModule::new("helix/core/misc");
-    let builtin_misc_module = include_str!("misc.scm").to_string();
 
     module.register_fn("fuzzy-match", fuzzy_match);
 
@@ -5088,10 +5108,6 @@ last-line : int?
             std::fs::write(target_directory, &builtin_misc_module).unwrap();
         }
 
-        engine.register_steel_module("helix/misc.scm".to_string(), builtin_misc_module);
-    }
-
-    if generate_sources {
         generate_module("misc.scm", &builtin_misc_module);
         configure_lsp_builtins("misc", &module);
     }
@@ -5196,6 +5212,7 @@ fn acquire_context_lock(
             editor,
             jobs,
             scroll: None,
+            raw: None,
         };
 
         let mut ctx = with_context_guard(&mut compositor_context);
@@ -5851,6 +5868,7 @@ pub fn load_buffer(cx: &mut Context) -> anyhow::Result<()> {
                     editor,
                     scroll: None,
                     jobs,
+                    raw: None,
                 };
 
                 let output = with_ephemeral_context(&mut cx, move |ctx| {
@@ -6118,6 +6136,7 @@ fn enqueue_command(cx: &mut Context, callback_fn: SteelVal) {
                     editor,
                     jobs,
                     scroll: None,
+                    raw: None,
                 };
 
                 let mut ctx = with_context_guard(&mut compositor_context);
@@ -6215,6 +6234,7 @@ fn await_value(cx: &mut Context, value: SteelVal, callback_fn: SteelVal) {
                     editor,
                     jobs,
                     scroll: None,
+                    raw: None,
                 };
 
                 let mut ctx = with_context_guard(&mut compositor_context);
@@ -6570,6 +6590,7 @@ fn create_callback<T: TryInto<SteelVal, Error = SteelErr> + 'static>(
                     editor,
                     jobs,
                     scroll: None,
+                    raw: None,
                 };
 
                 let mut ctx = with_context_guard(&mut compositor_context);
