@@ -596,10 +596,217 @@ pub fn format_docstring(doc: &str) -> String {
     docstring
 }
 
+/// Recognise a top-level `(provide NAME)` form. Token-based — strips
+/// the leading whitespace + the literal `(provide ` prefix, then takes
+/// the contiguous identifier characters up to the matching `)`. No
+/// regex. Returns `None` for malformed lines so we never produce a
+/// false-positive block boundary on something like a doc comment that
+/// happens to mention "(provide …)".
+fn parse_provide_name(line: &str) -> Option<&str> {
+    let after_paren = line.trim_start().strip_prefix("(provide ")?;
+    let close = after_paren.find(')')?;
+    let name = after_paren[..close].trim();
+    if name.is_empty()
+        || name
+            .chars()
+            .any(|c| c.is_whitespace() || c == '(' || c == ';')
+    {
+        return None;
+    }
+    Some(name)
+}
+
+/// Split the running static.scm buffer into a header (everything before
+/// the first `(provide …)` block) and an in-order list of `(name, text)`
+/// blocks. Each block's `text` includes the `(provide NAME)` line, every
+/// line up to (but not including) the next `(provide …)` line, and a
+/// trailing newline.
+///
+/// This is the inverse of "concatenate header + blocks" — round-tripping
+/// preserves the file structure verbatim, including blank-line
+/// separators and comment lines between forms. No regex; line-by-line
+/// tokenization driven by `parse_provide_name`.
+fn split_static_scm_blocks(text: &str) -> (String, Vec<(String, String)>) {
+    let mut header = String::new();
+    let mut blocks: Vec<(String, String)> = Vec::new();
+    let mut current: Option<(String, String)> = None;
+
+    for line in text.lines() {
+        if let Some(name) = parse_provide_name(line) {
+            if let Some((n, t)) = current.take() {
+                blocks.push((n, t));
+            }
+            current = Some((name.to_string(), format!("{line}\n")));
+        } else if let Some((_, ref mut t)) = current {
+            t.push_str(line);
+            t.push('\n');
+        } else {
+            header.push_str(line);
+            header.push('\n');
+        }
+    }
+    if let Some((n, t)) = current {
+        blocks.push((n, t));
+    }
+    (header, blocks)
+}
+
+/// Merge a list of pending `(name, block_text)` emits into the existing
+/// `(header, blocks)` split, with later emits superseding earlier
+/// entries that share the same name. The new entry is appended at the
+/// end of the block list — the macro form (which is what the emit
+/// pipeline produces) always takes the trailing position over the
+/// hand-authored prelude alias form.
+///
+/// Returns the reconstructed flat static.scm content.
+fn merge_static_scm_emits(
+    header: String,
+    mut blocks: Vec<(String, String)>,
+    emits: Vec<(String, String)>,
+) -> String {
+    for (name, block) in emits {
+        blocks.retain(|(n, _)| n != &name);
+        blocks.push((name, block));
+    }
+    let mut out = header;
+    for (_name, block) in &blocks {
+        out.push_str(block);
+    }
+    out
+}
+
+#[cfg(test)]
+mod static_scm_dedup_tests {
+    use super::*;
+
+    #[test]
+    fn parse_provide_handles_simple_name() {
+        assert_eq!(parse_provide_name("(provide insert_char)"), Some("insert_char"));
+    }
+
+    #[test]
+    fn parse_provide_handles_scheme_idioms() {
+        // Names like cx->current-file and range->selection are valid Scheme
+        // identifiers and the parser must accept the > and -> characters.
+        assert_eq!(parse_provide_name("(provide cx->current-file)"), Some("cx->current-file"));
+        assert_eq!(parse_provide_name("(provide range->selection)"), Some("range->selection"));
+        assert_eq!(parse_provide_name("(provide lsp-client-initialized?)"), Some("lsp-client-initialized?"));
+    }
+
+    #[test]
+    fn parse_provide_rejects_non_provide() {
+        assert_eq!(parse_provide_name(";; (provide foo) in a comment"), None);
+        assert_eq!(parse_provide_name("(define foo helix.static.foo)"), None);
+        assert_eq!(parse_provide_name(""), None);
+    }
+
+    #[test]
+    fn split_groups_blocks_by_provide() {
+        let input = "\
+;; header line 1
+;; header line 2
+\n\
+(provide foo)
+;;@doc
+;;Doc for foo
+(define foo helix.static.foo)
+
+(provide bar)
+;;@doc
+;;Doc for bar
+(define bar helix.static.bar)
+";
+        let (header, blocks) = split_static_scm_blocks(input);
+        assert!(header.contains("header line 1"));
+        assert!(header.contains("header line 2"));
+        assert!(!header.contains("provide"));
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].0, "foo");
+        assert!(blocks[0].1.contains("(provide foo)"));
+        assert!(blocks[0].1.contains("(define foo helix.static.foo)"));
+        assert_eq!(blocks[1].0, "bar");
+        assert!(blocks[1].1.contains("(define bar helix.static.bar)"));
+    }
+
+    #[test]
+    fn merge_overrides_duplicates_with_macro_form() {
+        // Simulate the actual situation: prelude has an alias-form block
+        // for cx->current-file, macro pipeline emits the wrapper form.
+        // The result must contain ONLY the wrapper form, with one
+        // (provide …) and one (define …) total.
+        let prelude = "\
+(require-builtin helix/core/static as helix.static.)
+
+(provide cx->current-file)
+;;@doc
+;;Get the currently focused file path
+(define cx->current-file helix.static.cx->current-file)
+
+(provide unrelated)
+;;@doc
+;;Some other binding
+(define unrelated helix.static.unrelated)
+";
+        let macro_block = "\n(provide cx->current-file)\n;;@doc\n;;Get the currently focused file path\n(define (cx->current-file)\n    (helix.static.cx->current-file *helix.cx*))\n";
+
+        let (header, blocks) = split_static_scm_blocks(prelude);
+        let final_text = merge_static_scm_emits(
+            header,
+            blocks,
+            vec![("cx->current-file".to_string(), macro_block.to_string())],
+        );
+
+        // Exactly one (provide cx->current-file) and one matching define.
+        let provide_count = final_text
+            .lines()
+            .filter(|l| l.trim() == "(provide cx->current-file)")
+            .count();
+        assert_eq!(provide_count, 1, "expected exactly one provide, got:\n{final_text}");
+
+        // The alias form must be gone; the wrapper form must remain.
+        assert!(!final_text.contains("(define cx->current-file helix.static.cx->current-file)"));
+        assert!(final_text.contains("(define (cx->current-file)"));
+        assert!(final_text.contains("*helix.cx*"));
+
+        // The unrelated block must be untouched.
+        assert!(final_text.contains("(provide unrelated)"));
+        assert!(final_text.contains("(define unrelated helix.static.unrelated)"));
+    }
+
+    #[test]
+    fn merge_appends_new_emits_in_order() {
+        let prelude = "\
+(require-builtin helix/core/static as helix.static.)
+";
+        let (header, blocks) = split_static_scm_blocks(prelude);
+        let final_text = merge_static_scm_emits(
+            header,
+            blocks,
+            vec![
+                ("first".to_string(), "(provide first)\n(define first helix.static.first)\n".to_string()),
+                ("second".to_string(), "(provide second)\n(define second helix.static.second)\n".to_string()),
+            ],
+        );
+        let first_pos = final_text.find("(provide first)").expect("first must exist");
+        let second_pos = final_text.find("(provide second)").expect("second must exist");
+        assert!(first_pos < second_pos, "insertion order must be preserved");
+    }
+}
+
 fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
     let mut module = BuiltInModule::new("helix/core/static");
 
     let mut builtin_static_command_module = include_str!("static.scm").to_string();
+
+    // Queue every (provide NAME)+(define NAME …) block emitted by the
+    // macro pipeline below into `pending_emits` instead of pushing each
+    // directly to the buffer. After all macros have run, we run a single
+    // dedup pass that supersedes any prelude entry sharing a name with
+    // the macro form — the macro form is what the actual register_fn
+    // call expects (it threads *helix.cx* explicitly), and Steel's
+    // (provide NAME) directive errors out with BadSyntax on the second
+    // definition of NAME__doc__ if both shapes survive into the file.
+    let mut pending_emits: Vec<(String, String)> = Vec::new();
 
     for command in TYPABLE_COMMAND_LIST {
         let func = |cx: &mut Context| {
@@ -625,17 +832,21 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
         if let MappableCommand::Static { name, fun, doc } = command {
             module.register_fn_with_ctx(CTX, name, fun);
 
-            let docstring = format_docstring(doc);
-
-            builtin_static_command_module.push_str(&format!(
-                r#"
+            if generate_sources {
+                let docstring = format_docstring(doc);
+                pending_emits.push((
+                    (*name).to_string(),
+                    format!(
+                        r#"
 (provide {})
 ;;@doc
 {}
 (define {} helix.static.{})
 "#,
-                name, docstring, name, name
-            ));
+                        name, docstring, name, name
+                    ),
+                ));
+            }
         }
     }
 
@@ -677,16 +888,18 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
     let mut template_function_arity_1 = |name: &str, doc: &str| {
         if generate_sources {
             let docstring = format_docstring(doc);
-
-            builtin_static_command_module.push_str(&format!(
-                r#"
+            pending_emits.push((
+                name.to_string(),
+                format!(
+                    r#"
 (provide {})
 ;;@doc
 {}
 (define ({} arg)
     (helix.static.{} *helix.cx* arg))
 "#,
-                name, docstring, name, name
+                    name, docstring, name, name
+                ),
             ));
         }
     };
@@ -747,16 +960,18 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
     let mut template_function_arity_0 = |name: &str, doc: &str| {
         if generate_sources {
             let docstring = format_docstring(doc);
-
-            builtin_static_command_module.push_str(&format!(
-                r#"
+            pending_emits.push((
+                name.to_string(),
+                format!(
+                    r#"
 (provide {})
 ;;@doc
 {}
 (define ({})
     (helix.static.{} *helix.cx*))
 "#,
-                name, docstring, name, name
+                    name, docstring, name, name
+                ),
             ));
         }
     };
@@ -829,16 +1044,18 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
     let mut template_function_arity_4 = |name: &str, doc: &str| {
         if generate_sources {
             let docstring = format_docstring(doc);
-
-            builtin_static_command_module.push_str(&format!(
-                r#"
+            pending_emits.push((
+                name.to_string(),
+                format!(
+                    r#"
 (provide {})
 ;;@doc
 {}
 (define ({} arg1 arg2 arg3 arg4)
     (helix.static.{} *helix.cx* arg1 arg2 arg3 arg4))
 "#,
-                name, docstring, name, name
+                    name, docstring, name, name
+                ),
             ));
         }
     };
@@ -858,7 +1075,8 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
 
     module.register_fn("clear-raw-content!", clear_raw_content);
     if generate_sources {
-        builtin_static_command_module.push_str(
+        pending_emits.push((
+            "clear-raw-content!".to_string(),
             r#"
 (provide clear-raw-content!)
 ;;@doc
@@ -867,23 +1085,26 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
 ;; fresh image ids.
 (define (clear-raw-content!)
     (helix.static.clear-raw-content! *helix.cx*))
-            "#,
-        );
+            "#
+            .to_string(),
+        ));
     }
 
     let mut template_function_arity_5 = |name: &str, doc: &str| {
         if generate_sources {
             let docstring = format_docstring(doc);
-
-            builtin_static_command_module.push_str(&format!(
-                r#"
+            pending_emits.push((
+                name.to_string(),
+                format!(
+                    r#"
 (provide {})
 ;;@doc
 {}
 (define ({} arg1 arg2 arg3 arg4 arg5)
     (helix.static.{} *helix.cx* arg1 arg2 arg3 arg4 arg5))
 "#,
-                name, docstring, name, name
+                    name, docstring, name, name
+                ),
             ));
         }
     };
@@ -904,16 +1125,18 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
     let mut template_function_arity_6 = |name: &str, doc: &str| {
         if generate_sources {
             let docstring = format_docstring(doc);
-
-            builtin_static_command_module.push_str(&format!(
-                r#"
+            pending_emits.push((
+                name.to_string(),
+                format!(
+                    r#"
 (provide {})
 ;;@doc
 {}
 (define ({} arg1 arg2 arg3 arg4 arg5 arg6)
     (helix.static.{} *helix.cx* arg1 arg2 arg3 arg4 arg5 arg6))
 "#,
-                name, docstring, name, name
+                    name, docstring, name, name
+                ),
             ));
         }
     };
@@ -976,16 +1199,18 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
     let mut template_function_no_context = |name: &str, doc: &str| {
         if generate_sources {
             let docstring = format_docstring(doc);
-
-            builtin_static_command_module.push_str(&format!(
-                r#"
+            pending_emits.push((
+                name.to_string(),
+                format!(
+                    r#"
 (provide {})
 ;;@doc
 {}
-(define {} helix.static.{})                
+(define {} helix.static.{})
             "#,
-                name, docstring, name, name
-            ))
+                    name, docstring, name, name
+                ),
+            ));
         }
     };
 
@@ -1064,6 +1289,16 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
         "get-init-scm-path",
         "Returns the path to the init.scm file as a string",
     );
+
+    // Replay every queued emit into the buffer, treating macro-emitted
+    // blocks as the authoritative form. Any prelude entry sharing a name
+    // with a queued emit is dropped (its byte range removed from the
+    // block list) and the macro form appended at the end. This keeps the
+    // generated file free of duplicate (provide NAME) … (define NAME …)
+    // pairs that Steel would otherwise reject with BadSyntax on the
+    // duplicate NAME__doc__ generated by ;;@doc.
+    let (header, blocks) = split_static_scm_blocks(&builtin_static_command_module);
+    builtin_static_command_module = merge_static_scm_emits(header, blocks, pending_emits);
 
     if generate_sources {
         if let Some(mut target_directory) = alternative_runtime_search_path() {
