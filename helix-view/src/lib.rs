@@ -19,7 +19,7 @@ pub mod theme;
 pub mod tree;
 pub mod view;
 
-pub mod steel_reflect;
+pub mod extension;
 
 use std::num::NonZeroUsize;
 

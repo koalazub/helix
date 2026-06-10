@@ -2,7 +2,7 @@ pub mod backend;
 pub mod buffer;
 pub mod graphics;
 pub mod layout;
-pub mod steel_reflect;
+pub mod extension;
 pub mod symbols;
 pub mod terminal;
 pub mod text;

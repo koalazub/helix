@@ -36,7 +36,7 @@ use helix_view::{
         DocumentDidChange, DocumentDidClose, DocumentDidOpen, DocumentFocusGained,
         DocumentFocusLost, DocumentSaved, SelectionDidChange, ViewportChanged,
     },
-    steel_reflect::document_id_to_usize,
+    extension::document_id_to_usize,
     graphics::CursorKind,
     input::KeyEvent,
     theme::Color,
@@ -6851,37 +6851,6 @@ pub fn clear_all_math_lines(cx: &mut Context) {
 }
 
 pub fn insert_string(cx: &mut Context, string: SteelString) {
-    // Debug trace so we can pinpoint which call is responsible when a
-    // plugin storms the document with single-char inserts. The string
-    // is truncated and the newlines are escaped so the log line stays
-    // on a single line even for a raw "\n" insert. Enable with
-    // `RUST_LOG=helix_term::commands::engine::steel=debug` or a wider
-    // filter — `-vv` at the CLI is enough.
-    if log::log_enabled!(log::Level::Debug) {
-        let preview: String = string
-            .as_str()
-            .chars()
-            .take(40)
-            .flat_map(|c| match c {
-                '\n' => "\\n".chars().collect::<Vec<_>>(),
-                '\r' => "\\r".chars().collect::<Vec<_>>(),
-                '\t' => "\\t".chars().collect::<Vec<_>>(),
-                c => vec![c],
-            })
-            .collect();
-        let (view, doc) = current_ref!(cx.editor);
-        let cursor = doc
-            .selection(view.id)
-            .primary()
-            .cursor(doc.text().slice(..));
-        log::debug!(
-            "steel.insert_string: cursor_char={} len={} preview=\"{}\"",
-            cursor,
-            string.as_str().len(),
-            preview
-        );
-    }
-
     let (view, doc) = current!(cx.editor);
 
     let indent = Tendril::from(string.as_str());
