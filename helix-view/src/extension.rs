@@ -5,11 +5,14 @@ pub fn document_id_to_usize(doc_id: &DocumentId) -> usize {
 }
 
 #[cfg(feature = "steel")]
-mod steel_implementations {
+pub mod steel_implementations {
     use steel::{
         gc::unsafe_erased_pointers::CustomReference,
         rvals::{as_underlying_type, Custom},
+        RootedSteelVal, SteelVal,
     };
+
+    use std::sync::Arc;
 
     use crate::{
         document::Mode,
@@ -22,6 +25,32 @@ mod steel_implementations {
         input::{Event, KeyEvent},
         Document, DocumentId, Editor, ViewId,
     };
+
+    #[derive(Debug, Clone)]
+    pub struct CustomStatusElement {
+        pub render: Arc<RootedSteelVal>,
+    }
+
+    impl Custom for CustomStatusElement {}
+
+    impl CustomStatusElement {
+        pub fn new(render: SteelVal) -> Result<CustomStatusElement, String> {
+            if !render.is_function() {
+                return Err("Bad value!".into());
+            }
+            Ok(Self {
+                render: Arc::new(render.as_rooted()),
+            })
+        }
+    }
+
+    impl PartialEq for CustomStatusElement {
+        fn eq(&self, other: &Self) -> bool {
+            self.render.value() == other.render.value()
+        }
+    }
+
+    impl Eq for CustomStatusElement {}
 
     impl steel::gc::unsafe_erased_pointers::CustomReference for Editor {}
     steel::custom_reference!(Editor);

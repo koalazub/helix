@@ -29,7 +29,7 @@ use helix_view::{
     graphics::{Color, CursorKind, Modifier, Rect, Style},
     input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind},
     keyboard::{KeyCode, KeyModifiers},
-    Document, Editor, Theme, View,
+    Document, DocumentId, Editor, Theme, View, ViewId,
 };
 use std::{mem::take, num::NonZeroUsize, ops, path::PathBuf, rc::Rc};
 
@@ -76,173 +76,187 @@ impl EditorView {
 
     pub fn render_view(
         &self,
-        editor: &Editor,
-        doc: &Document,
-        view: &View,
+        doc_id: DocumentId,
+        view_id: ViewId,
         viewport: Rect,
         surface: &mut Surface,
-        raw: &mut tui::buffer::RawSurface,
         is_focused: bool,
+        cx: &mut Context,
     ) {
-        let inner = view.inner_area(doc);
-        let area = view.area;
-        let theme = &editor.theme;
-        let config = editor.config();
-        let loader = editor.syn_loader.load();
-
-        let view_offset = doc.view_offset(view.id);
-
-        let text_annotations = view.text_annotations(doc, Some(theme));
-        let mut decorations = DecorationManager::default();
-
-        if is_focused && config.cursorline {
-            decorations.add_decoration(Self::cursorline(doc, view, theme));
-        }
-
-        if is_focused && config.cursorcolumn {
-            Self::highlight_cursorcolumn(doc, view, surface, theme, inner, &text_annotations);
-        }
-
-        // Set DAP highlights, if needed.
-        if let Some(frame) = editor.current_stack_frame() {
-            let dap_line = frame.line.saturating_sub(1);
-            let style = theme.get("ui.highlight.frameline");
-            let line_decoration = move |renderer: &mut TextRenderer, pos: LinePos| {
-                if pos.doc_line != dap_line {
-                    return;
-                }
-                renderer.set_style(Rect::new(inner.x, pos.visual_line, inner.width, 1), style);
-            };
-
-            decorations.add_decoration(line_decoration);
-        }
-
-        let syntax_highlighter =
-            Self::doc_syntax_highlighter(doc, view_offset.anchor, inner.height, &loader);
-        let mut overlays = Vec::new();
-
-        overlays.push(Self::overlay_syntax_highlights(
-            doc,
-            view_offset.anchor,
-            inner.height,
-            &text_annotations,
-        ));
-
-        if doc
-            .language_config()
-            .and_then(|config| config.rainbow_brackets)
-            .unwrap_or(config.rainbow_brackets)
+        let doc = cx.editor.document(doc_id).unwrap();
+        let view = cx.editor.tree.get(view_id);
         {
-            if let Some(overlay) =
-                Self::doc_rainbow_highlights(doc, view_offset.anchor, inner.height, theme, &loader)
-            {
-                overlays.push(overlay);
+            let editor = &cx.editor;
+
+            let inner = view.inner_area(doc);
+            let area = view.area;
+            let theme = &editor.theme;
+            let config = editor.config();
+            let loader = editor.syn_loader.load();
+
+            let view_offset = doc.view_offset(view.id);
+
+            let text_annotations = view.text_annotations(doc, Some(theme));
+            let mut decorations = DecorationManager::default();
+
+            if is_focused && config.cursorline {
+                decorations.add_decoration(Self::cursorline(doc, view, theme));
             }
-        }
 
-        if let Some(overlay) = Self::doc_document_link_highlights(doc, theme) {
-            overlays.push(overlay);
-        }
+            if is_focused && config.cursorcolumn {
+                Self::highlight_cursorcolumn(doc, view, surface, theme, inner, &text_annotations);
+            }
 
-        Self::doc_diagnostics_highlights_into(doc, theme, &mut overlays);
+            // Set DAP highlights, if needed.
+            if let Some(frame) = editor.current_stack_frame() {
+                let dap_line = frame.line.saturating_sub(1);
+                let style = theme.get("ui.highlight.frameline");
+                let line_decoration = move |renderer: &mut TextRenderer, pos: LinePos| {
+                    if pos.doc_line != dap_line {
+                        return;
+                    }
+                    renderer.set_style(Rect::new(inner.x, pos.visual_line, inner.width, 1), style);
+                };
 
-        if is_focused {
-            if config.lsp.auto_document_highlight {
-                if let Some(overlay) = Self::doc_document_highlights(doc, view, theme) {
+                decorations.add_decoration(line_decoration);
+            }
+
+            let syntax_highlighter =
+                Self::doc_syntax_highlighter(doc, view_offset.anchor, inner.height, &loader);
+            let mut overlays = Vec::new();
+
+            overlays.push(Self::overlay_syntax_highlights(
+                doc,
+                view_offset.anchor,
+                inner.height,
+                &text_annotations,
+            ));
+
+            if doc
+                .language_config()
+                .and_then(|config| config.rainbow_brackets)
+                .unwrap_or(config.rainbow_brackets)
+            {
+                if let Some(overlay) = Self::doc_rainbow_highlights(
+                    doc,
+                    view_offset.anchor,
+                    inner.height,
+                    theme,
+                    &loader,
+                ) {
                     overlays.push(overlay);
                 }
             }
-            if let Some(tabstops) = Self::tabstop_highlights(doc, theme) {
-                overlays.push(tabstops);
-            }
-            overlays.push(Self::doc_selection_highlights(
-                editor.mode(),
-                doc,
-                view,
-                theme,
-                &config.cursor_shape,
-                self.terminal_focused,
-            ));
-            if let Some(overlay) = Self::highlight_focused_view_elements(view, doc, theme) {
+
+            if let Some(overlay) = Self::doc_document_link_highlights(doc, theme) {
                 overlays.push(overlay);
             }
-        }
 
-        let gutter_overflow = view.gutter_offset(doc) == 0;
-        if !gutter_overflow {
-            Self::render_gutter(
-                editor,
-                doc,
-                view,
-                view.area,
-                theme,
-                is_focused & self.terminal_focused,
-                &mut decorations,
-            );
-        }
+            Self::doc_diagnostics_highlights_into(doc, theme, &mut overlays);
 
-        Self::render_rulers(editor, doc, view, inner, surface, theme);
-
-        let primary_cursor = doc
-            .selection(view.id)
-            .primary()
-            .cursor(doc.text().slice(..));
-        if is_focused {
-            decorations.add_decoration(text_decorations::Cursor {
-                cache: &editor.cursor_cache,
-                primary_cursor,
-            });
-        }
-        let width = view.inner_width(doc);
-        let config = doc.config.load();
-        let enable_cursor_line = view
-            .diagnostics_handler
-            .show_cursorline_diagnostics(doc, view.id);
-        let inline_diagnostic_config = config.inline_diagnostics.prepare(width, enable_cursor_line);
-        decorations.add_decoration(InlineDiagnostics::new(
-            doc,
-            theme,
-            primary_cursor,
-            inline_diagnostic_config,
-            config.end_of_line_diagnostics,
-        ));
-
-        // Plugin-staged math layouts (stacked limits for \int / \sum,
-        // fraction numerator/denominator rows, etc.). Only registers when
-        // the Document actually has entries so the decoration pipeline
-        // isn't visited when nothing is pending.
-        if !doc.math_lines().is_empty() {
-            decorations.add_decoration(text_decorations::MathAnnotations::new(doc, theme));
-        }
-        render_document(
-            surface,
-            raw,
-            inner,
-            doc,
-            view_offset,
-            &text_annotations,
-            syntax_highlighter,
-            overlays,
-            theme,
-            decorations,
-        );
-
-        // if we're not at the edge of the screen, draw a right border
-        if viewport.right() != view.area.right() {
-            let x = area.right();
-            let border_style = theme.get("ui.window");
-            for y in area.top()..area.bottom() {
-                surface[(x, y)]
-                    .set_symbol(tui::symbols::line::VERTICAL)
-                    //.set_symbol(" ")
-                    .set_style(border_style);
+            if is_focused {
+                if config.lsp.auto_document_highlight {
+                    if let Some(overlay) = Self::doc_document_highlights(doc, view, theme) {
+                        overlays.push(overlay);
+                    }
+                }
+                if let Some(tabstops) = Self::tabstop_highlights(doc, theme) {
+                    overlays.push(tabstops);
+                }
+                overlays.push(Self::doc_selection_highlights(
+                    editor.mode(),
+                    doc,
+                    view,
+                    theme,
+                    &config.cursor_shape,
+                    self.terminal_focused,
+                ));
+                if let Some(overlay) = Self::highlight_focused_view_elements(view, doc, theme) {
+                    overlays.push(overlay);
+                }
             }
-        }
 
-        if config.inline_diagnostics.disabled()
-            && config.end_of_line_diagnostics == DiagnosticFilter::Disable
-        {
-            Self::render_diagnostics(doc, view, inner, surface, theme);
+            let gutter_overflow = view.gutter_offset(doc) == 0;
+            if !gutter_overflow {
+                Self::render_gutter(
+                    editor,
+                    doc,
+                    view,
+                    view.area,
+                    theme,
+                    is_focused & self.terminal_focused,
+                    &mut decorations,
+                );
+            }
+
+            Self::render_rulers(editor, doc, view, inner, surface, theme);
+
+            let primary_cursor = doc
+                .selection(view.id)
+                .primary()
+                .cursor(doc.text().slice(..));
+            if is_focused {
+                decorations.add_decoration(text_decorations::Cursor {
+                    cache: &editor.cursor_cache,
+                    primary_cursor,
+                });
+            }
+            let width = view.inner_width(doc);
+            let config = doc.config.load();
+            let enable_cursor_line = view
+                .diagnostics_handler
+                .show_cursorline_diagnostics(doc, view.id);
+            let inline_diagnostic_config =
+                config.inline_diagnostics.prepare(width, enable_cursor_line);
+            decorations.add_decoration(InlineDiagnostics::new(
+                doc,
+                theme,
+                primary_cursor,
+                inline_diagnostic_config,
+                config.end_of_line_diagnostics,
+            ));
+
+            // Plugin-staged math layouts (stacked limits for \int / \sum,
+            // fraction numerator/denominator rows, etc.). Only registers when
+            // the Document actually has entries so the decoration pipeline
+            // isn't visited when nothing is pending.
+            if !doc.math_lines().is_empty() {
+                decorations.add_decoration(text_decorations::MathAnnotations::new(doc, theme));
+            }
+            let raw = cx
+                .raw
+                .as_deref_mut()
+                .expect("raw surface must be present during render");
+            render_document(
+                surface,
+                raw,
+                inner,
+                doc,
+                view_offset,
+                &text_annotations,
+                syntax_highlighter,
+                overlays,
+                theme,
+                decorations,
+            );
+
+            // if we're not at the edge of the screen, draw a right border
+            if viewport.right() != view.area.right() {
+                let x = area.right();
+                let border_style = theme.get("ui.window");
+                for y in area.top()..area.bottom() {
+                    surface[(x, y)]
+                        .set_symbol(tui::symbols::line::VERTICAL)
+                        //.set_symbol(" ")
+                        .set_style(border_style);
+                }
+            }
+
+            if config.inline_diagnostics.disabled()
+                && config.end_of_line_diagnostics == DiagnosticFilter::Disable
+            {
+                Self::render_diagnostics(doc, view, inner, surface, theme);
+            }
         }
 
         let statusline_area = view
@@ -250,8 +264,14 @@ impl EditorView {
             .clip_top(view.area.height.saturating_sub(1))
             .clip_bottom(1); // -1 from bottom to remove commandline
 
-        let mut context =
-            statusline::RenderContext::new(editor, doc, view, is_focused, &self.spinners);
+        let mut context = statusline::RenderContext::new(
+            cx.editor,
+            cx.jobs,
+            view_id,
+            doc_id,
+            is_focused,
+            &self.spinners,
+        );
 
         statusline::render(&mut context, statusline_area, surface);
     }
@@ -362,6 +382,11 @@ impl EditorView {
         theme: &Theme,
         overlay_highlights: &mut Vec<OverlayHighlights>,
     ) {
+        // Skip redundant work if no diagnostics.
+        if doc.diagnostics().is_empty() {
+            return;
+        }
+
         use helix_core::diagnostic::{DiagnosticTag, Range, Severity};
         let get_scope_of = |scope| {
             theme
@@ -708,7 +733,7 @@ impl EditorView {
             let rem_width = surface.area.width.saturating_sub(used_width);
 
             x = surface
-                .set_stringn(x, viewport.y, text, rem_width as usize, style)
+                .set_stringn(x, viewport.y, &text, rem_width as usize, style)
                 .0;
 
             if x >= surface.area.right() {
@@ -1173,6 +1198,20 @@ impl EditorView {
     }
 }
 
+/// Whether the focused doc's workspace is in restricted mode and running `trust` would
+/// change something visible at the workspace level.
+fn workspace_trust_indicator_visible(editor: &Editor) -> bool {
+    if editor.workspace_trust.implicit_level()
+        == helix_loader::workspace_trust::ImplicitTrustLevel::Insecure
+    {
+        return false;
+    }
+    let (_, doc) = helix_view::current_ref!(editor);
+    editor
+        .workspace_trust
+        .workspace_restricted(doc.workspace_root())
+}
+
 impl EditorView {
     /// must be called whenever the editor processed input that
     /// is not a `KeyEvent`. In these cases any pending keys/on next
@@ -1271,9 +1310,8 @@ impl EditorView {
 
                     let (view, doc) = current!(cxt.editor);
 
-                    let path = match doc.path() {
-                        Some(path) => path.clone(),
-                        None => return EventResult::Ignored(None),
+                    let Some(path) = doc.path().map(ToOwned::to_owned) else {
+                        return EventResult::Ignored(None);
                     };
 
                     if let Some(char_idx) =
@@ -1602,6 +1640,7 @@ impl Component for EditorView {
                         force: false,
                         write_scratch: false,
                         auto_format: false,
+                        code_actions: false,
                     };
                     if let Err(e) = commands::typed::write_all_impl(context, options) {
                         context.editor.set_error(format!("{}", e));
@@ -1655,13 +1694,22 @@ impl Component for EditorView {
             Self::render_bufferline(cx.editor, area.with_height(1), surface);
         }
 
-        for (view, is_focused) in cx.editor.tree.views() {
-            let doc = cx.editor.document(view.doc).unwrap();
-            let raw = cx
-                .raw
-                .as_deref_mut()
-                .expect("raw surface must be present during render");
-            self.render_view(cx.editor, doc, view, area, surface, raw, is_focused);
+        let views: Vec<(ViewId, bool)> = {
+            cx.editor
+                .tree
+                .views()
+                .map(|(view, is_focused)| (view.id, is_focused))
+                .collect()
+        };
+        for (view_id, is_focused) in views {
+            self.render_view(
+                cx.editor.tree.get(view_id).doc,
+                view_id,
+                area,
+                surface,
+                is_focused,
+                cx,
+            );
         }
 
         if config.auto_info {
@@ -1709,13 +1757,30 @@ impl Component for EditorView {
             } else {
                 0
             };
+            let restricted = workspace_trust_indicator_visible(cx.editor);
+            let trust_width = if restricted { 3 } else { 0 };
             surface.set_string(
-                area.x + area.width.saturating_sub(key_width + macro_width),
+                area.x
+                    + area
+                        .width
+                        .saturating_sub(key_width + macro_width + trust_width),
                 area.y + area.height.saturating_sub(1),
                 disp.get(disp.len().saturating_sub(key_width as usize)..)
                     .unwrap_or(&disp),
                 style,
             );
+            if restricted {
+                let style = style
+                    .fg(helix_view::graphics::Color::Yellow)
+                    .add_modifier(Modifier::BOLD);
+                surface.set_string(
+                    area.x
+                        .saturating_add(area.width.saturating_sub(3 + macro_width)),
+                    area.y + area.height.saturating_sub(1),
+                    "[⚠]",
+                    style,
+                );
+            }
             if let Some((reg, _)) = cx.editor.macro_recording {
                 let disp = format!("[{}]", reg);
                 let style = style

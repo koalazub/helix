@@ -1,4 +1,4 @@
-mod components;
+pub mod components;
 
 use arc_swap::{ArcSwap, ArcSwapAny};
 use helix_core::{
@@ -12,7 +12,7 @@ use helix_core::{
     syntax::{
         self,
         config::{
-            default_timeout, AutoPairConfig, GlobSet, LanguageConfiguration,
+            default_timeout, AutoPairConfig, LanguageConfiguration,
             LanguageServerConfiguration, SoftWrap,
         },
         LanguageLoader,
@@ -36,7 +36,7 @@ use helix_view::{
         DocumentDidChange, DocumentDidClose, DocumentDidOpen, DocumentFocusGained,
         DocumentFocusLost, DocumentSaved, SelectionDidChange, ViewportChanged,
     },
-    extension::document_id_to_usize,
+    extension::{document_id_to_usize, steel_implementations::CustomStatusElement},
     graphics::CursorKind,
     input::KeyEvent,
     theme::Color,
@@ -566,6 +566,7 @@ fn load_keymap_api(engine: &mut Engine, generate_sources: bool) {
         .register_fn("keymap?", is_keymap)
         .register_fn("helix-deep-copy-keymap", deep_copy_keymap)
         .register_fn("query-keymap", query_keybindings)
+        .register_fn("flatten-keymap", flatten_keymap)
         .register_fn(
             "#%add-extension-or-labeled-keymap",
             add_extension_or_labeled_keymap,
@@ -2105,17 +2106,31 @@ fn load_editor_api(engine: &mut Engine, generate_sources: bool) {
             CTX,
             "editor-document-reload",
             |cx: &mut Context, doc: DocumentId| -> anyhow::Result<()> {
-                let path = cx.editor.documents.get(&doc).and_then(|x| x.path().cloned());
+                let path = cx
+                    .editor
+                    .documents
+                    .get(&doc)
+                    .and_then(|x| x.path().map(|x| x.to_path_buf()));
+
                 for (view, _) in cx.editor.tree.views_mut() {
                     if let Some(x) = cx.editor.documents.get_mut(&doc) {
-                        x.reload(view, &cx.editor.diff_providers)?;
+                        let trust_full = cx
+                            .editor
+                            .workspace_trust
+                            .query(
+                                x.workspace_root(),
+                                helix_loader::workspace_trust::TrustQuery::Git,
+                            )
+                            .is_trusted();
+
+                        x.reload(view, &cx.editor.diff_providers, trust_full)?;
                     }
                 }
                 if let Some(path) = path {
                     cx.editor
                         .language_servers
                         .file_event_handler
-                        .file_changed(path);
+                        .file_changed(path.to_path_buf());
                 }
                 Ok(())
             },
@@ -2754,6 +2769,41 @@ pub fn query_keybindings(
     } else {
         Ok(SteelVal::BoolV(false))
     }
+}
+
+pub fn flatten_keymap(map: &mut EmbeddedKeyMap, mode: SteelString) -> Vec<Vec<String>> {
+    fn walk(trie: &KeyTrie, path: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+        match trie {
+            KeyTrie::MappableCommand(cmd) => {
+                let name = cmd.name();
+                let mut entry = path.clone();
+                entry.push(name.to_string());
+                out.push(entry);
+            }
+            KeyTrie::Sequence(_) => {}
+            KeyTrie::Node(node) => {
+                for (key, sub) in node.iter() {
+                    path.push(key.to_string());
+                    walk(sub, path, out);
+                    path.pop();
+                }
+            }
+        }
+    }
+
+    let mode = match mode.as_str() {
+        "normal" => Mode::Normal,
+        "select" => Mode::Select,
+        "insert" => Mode::Insert,
+        _ => return Vec::new(),
+    };
+
+    let mut out = Vec::new();
+    if let Some(trie) = map.0.get(&mode) {
+        let mut path = Vec::new();
+        walk(trie, &mut path, &mut out);
+    }
+    out
 }
 
 pub fn is_keymap(keymap: SteelVal) -> bool {
@@ -3460,37 +3510,48 @@ impl HelixConfiguration {
         let mut app_config = self.load_config();
 
         fn steel_to_elements(val: &SteelVal) -> anyhow::Result<StatusLineElement> {
-            if let SteelVal::StringV(s) = val {
-                let value = match s.as_str() {
-                    "mode" => StatusLineElement::Mode,
-                    "spinner" => StatusLineElement::Spinner,
-                    "file-base-name" => StatusLineElement::FileBaseName,
-                    "file-name" => StatusLineElement::FileName,
-                    "file-absolute-path" => StatusLineElement::FileAbsolutePath,
-                    "file-modification-indicator" => StatusLineElement::FileModificationIndicator,
-                    "read-only-indicator" => StatusLineElement::ReadOnlyIndicator,
-                    "file-encoding" => StatusLineElement::FileEncoding,
-                    "file-line-ending" => StatusLineElement::FileLineEnding,
-                    "file-indent-style" => StatusLineElement::FileIndentStyle,
-                    "file-type" => StatusLineElement::FileType,
-                    "diagnostics" => StatusLineElement::Diagnostics,
-                    "workspace-diagnostics" => StatusLineElement::WorkspaceDiagnostics,
-                    "selections" => StatusLineElement::Selections,
-                    "primary-selection-length" => StatusLineElement::PrimarySelectionLength,
-                    "position" => StatusLineElement::Position,
-                    "separator" => StatusLineElement::Separator,
-                    "position-percentage" => StatusLineElement::PositionPercentage,
-                    "total-line-numbers" => StatusLineElement::TotalLineNumbers,
-                    "spacer" => StatusLineElement::Spacer,
-                    "version-control" => StatusLineElement::VersionControl,
-                    "register" => StatusLineElement::Register,
-                    "current-working-directory" => StatusLineElement::CurrentWorkingDirectory,
-                    _ => anyhow::bail!("Unknown status line element: {}", s),
-                };
-
-                Ok(value)
-            } else {
-                anyhow::bail!("Cannot convert value to status line element: {}", val)
+            match val {
+                SteelVal::StringV(s) | SteelVal::SymbolV(s) => {
+                    let value = match s.as_str() {
+                        "mode" => StatusLineElement::Mode,
+                        "spinner" => StatusLineElement::Spinner,
+                        "file-base-name" => StatusLineElement::FileBaseName,
+                        "file-name" => StatusLineElement::FileName,
+                        "file-absolute-path" => StatusLineElement::FileAbsolutePath,
+                        "file-modification-indicator" => {
+                            StatusLineElement::FileModificationIndicator
+                        }
+                        "read-only-indicator" => StatusLineElement::ReadOnlyIndicator,
+                        "file-encoding" => StatusLineElement::FileEncoding,
+                        "file-line-ending" => StatusLineElement::FileLineEnding,
+                        "file-indent-style" => StatusLineElement::FileIndentStyle,
+                        "file-type" => StatusLineElement::FileType,
+                        "diagnostics" => StatusLineElement::Diagnostics,
+                        "workspace-diagnostics" => StatusLineElement::WorkspaceDiagnostics,
+                        "selections" => StatusLineElement::Selections,
+                        "primary-selection-length" => StatusLineElement::PrimarySelectionLength,
+                        "position" => StatusLineElement::Position,
+                        "separator" => StatusLineElement::Separator,
+                        "position-percentage" => StatusLineElement::PositionPercentage,
+                        "total-line-numbers" => StatusLineElement::TotalLineNumbers,
+                        "spacer" => StatusLineElement::Spacer,
+                        "version-control" => StatusLineElement::VersionControl,
+                        "register" => StatusLineElement::Register,
+                        "current-working-directory" => StatusLineElement::CurrentWorkingDirectory,
+                        _ => anyhow::bail!("Unknown status line element: {}", s),
+                    };
+                    Ok(value)
+                }
+                SteelVal::Custom(custom) => {
+                    let c = custom.write();
+                    let Some(element) =
+                        steel::rvals::as_underlying_type::<CustomStatusElement>(c.as_ref())
+                    else {
+                        anyhow::bail!("Cannot convert value to status line element: {}", val)
+                    };
+                    Ok(StatusLineElement::Custom(element.clone()))
+                }
+                _ => anyhow::bail!("Cannot convert value to status line element: {}", val),
             }
         }
 
@@ -3506,7 +3567,7 @@ impl HelixConfiguration {
         }
 
         fn steel_to_severity(val: &SteelVal) -> anyhow::Result<Severity> {
-            if let SteelVal::StringV(s) = val {
+            if let SteelVal::StringV(s) | SteelVal::SymbolV(s) = val {
                 let value = match s.as_str() {
                     "hint" => Severity::Hint,
                     "info" => Severity::Info,
@@ -5922,7 +5983,7 @@ fn set_buffer_uri(cx: &mut Context, uri: SteelString) -> anyhow::Result<()> {
     let current_doc = cx.editor.documents.get_mut(&view.doc)
         .ok_or_else(|| anyhow::anyhow!("No active document"))?;
 
-    if let Ok(url) = url::Url::from_str(uri.as_str()) {
+    if let Ok(url) = helix_stdx::Url::from_str(uri.as_str()) {
         current_doc.uri = Some(Box::new(url));
     } else {
         anyhow::bail!("Unable to parse uri: {:?}", uri);
