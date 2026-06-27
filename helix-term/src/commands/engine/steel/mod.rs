@@ -912,51 +912,6 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
         }};
     }
 
-    function1!(
-        "set-current-selection-object!",
-        set_selection,
-        "Update the selection object to the current selection within the editor"
-    );
-    function1!(
-        "push-range-to-selection!",
-        push_range_to_selection,
-        "Push a new range to a selection. The new selection will be the primary one"
-    );
-    function1!(
-        "set-current-selection-primary-index!",
-        set_selection_primary_index,
-        "Set the primary index of the current selection"
-    );
-    function1!(
-        "remove-current-selection-range!",
-        remove_selection_range,
-        "Remove a range from the current selection"
-    );
-
-    function1!(
-        "regex-selection",
-        regex_selection,
-        "Run the given regex within the existing buffer"
-    );
-
-    function1!(
-        "replace-selection-with",
-        replace_selection,
-        "Replace the existing selection with the given string"
-    );
-
-    function1!(
-        "enqueue-expression-in-engine",
-        run_expression_in_engine,
-        "Enqueue an expression to run at the top level context, 
-        after the existing function context has exited."
-    );
-
-    function1!(
-        "get-current-line-character",
-        current_line_character,
-        "Returns the current column number with the given position encoding"
-    );
 
     let mut template_function_arity_0 = |name: &str, doc: &str| {
         if generate_sources {
@@ -984,58 +939,6 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
         }};
     }
 
-    function0!(
-        "cx->current-file",
-        current_path,
-        "Get the currently focused file path"
-    );
-
-    function0!(
-        "current_selection",
-        get_selection,
-        "Returns the current selection as a string"
-    );
-    function0!(
-        "current-selection->string",
-        get_selection,
-        "Returns the current selection as a string"
-    );
-    function0!("load-buffer!", load_buffer, "Evaluates the current buffer");
-    function0!(
-        "current-highlighted-text!",
-        get_highlighted_text,
-        "Returns the currently highlighted text as a string"
-    );
-    function0!(
-        "get-current-line-number",
-        current_line_number,
-        "Returns the current line number"
-    );
-    function0!(
-        "get-current-column-number",
-        current_column_number,
-        "Returns the visual current column number of unicode graphemes"
-    );
-    function0!(
-        "current-selection-object",
-        current_selection,
-        "Returns the current selection object"
-    );
-    function0!(
-        "get-helix-cwd",
-        get_helix_cwd,
-        "Returns the current working directly that helix is using"
-    );
-    function0!(
-        "move-window-far-left",
-        move_window_to_the_left,
-        "Moves the current window to the far left"
-    );
-    function0!(
-        "move-window-far-right",
-        move_window_to_the_right,
-        "Moves the current window to the far right"
-    );
     function0!(
         "commit-changes-to-history",
         commit_changes_to_history,
