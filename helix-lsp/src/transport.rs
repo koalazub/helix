@@ -156,16 +156,61 @@ impl Transport {
         output
     }
 
+    /// Classify a language server's stderr line by well-known severity
+    /// prefixes so routine chatter is not logged at error level. Covers Julia
+    /// logging (`[ Info:` / `┌ Info:` block openers with `│`/`└` continuation
+    /// lines inheriting the opener's severity), the Julia compiler's
+    /// lowercase `info:`/`warning:` prints, and common `INFO:`/`[WARN]`-style
+    /// prefixes. Unknown lines stay at error level so real failures are never
+    /// demoted.
+    fn classify_stderr_line(line: &str, last_severity: log::Level) -> log::Level {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('│') || trimmed.starts_with('└') {
+            return last_severity;
+        }
+        const PREFIXES: &[(&str, log::Level)] = &[
+            ("[ Info:", log::Level::Info),
+            ("┌ Info:", log::Level::Info),
+            ("info:", log::Level::Info),
+            ("INFO:", log::Level::Info),
+            ("[INFO]", log::Level::Info),
+            ("[ Warn:", log::Level::Warn),
+            ("[ Warning:", log::Level::Warn),
+            ("┌ Warn:", log::Level::Warn),
+            ("┌ Warning:", log::Level::Warn),
+            ("warning:", log::Level::Warn),
+            ("WARN:", log::Level::Warn),
+            ("WARNING:", log::Level::Warn),
+            ("[WARN]", log::Level::Warn),
+            ("[ Debug:", log::Level::Debug),
+            ("┌ Debug:", log::Level::Debug),
+            ("debug:", log::Level::Debug),
+            ("DEBUG:", log::Level::Debug),
+            ("[DEBUG]", log::Level::Debug),
+            ("TRACE:", log::Level::Trace),
+            ("[TRACE]", log::Level::Trace),
+        ];
+        for (prefix, level) in PREFIXES {
+            if trimmed.starts_with(prefix) {
+                return *level;
+            }
+        }
+        log::Level::Error
+    }
+
     async fn recv_server_error(
         err: &mut (impl AsyncBufRead + Unpin + Send),
         buffer: &mut String,
         language_server_name: &str,
+        last_severity: &mut log::Level,
     ) -> Result<()> {
         buffer.truncate(0);
         if err.read_line(buffer).await? == 0 {
             return Err(Error::StreamClosed);
         };
-        error!("{language_server_name} err <- {buffer:?}");
+        let level = Self::classify_stderr_line(buffer, *last_severity);
+        *last_severity = level;
+        log::log!(level, "{language_server_name} err <- {buffer:?}");
 
         Ok(())
     }
@@ -354,9 +399,15 @@ impl Transport {
 
     async fn err(transport: Arc<Self>, mut server_stderr: BufReader<ChildStderr>) {
         let mut recv_buffer = String::new();
+        let mut last_severity = log::Level::Error;
         loop {
-            match Self::recv_server_error(&mut server_stderr, &mut recv_buffer, &transport.name)
-                .await
+            match Self::recv_server_error(
+                &mut server_stderr,
+                &mut recv_buffer,
+                &transport.name,
+                &mut last_severity,
+            )
+            .await
             {
                 Ok(_) => {}
                 Err(err) => {
@@ -502,5 +553,33 @@ impl Transport {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Transport;
+    use log::Level;
+
+    #[test]
+    fn stderr_severity_classification() {
+        let classify = |line, last| Transport::classify_stderr_line(line, last);
+        assert_eq!(classify("[ Info: Using stdio\n", Level::Error), Level::Info);
+        assert_eq!(
+            classify("┌ Info: Running JETLS with the following setup:\n", Level::Error),
+            Level::Info
+        );
+        assert_eq!(classify("│   Sys.BINDIR = \"...\"\n", Level::Info), Level::Info);
+        assert_eq!(classify("└   JETLS_DEBUG_LOWERING = false\n", Level::Info), Level::Info);
+        assert_eq!(
+            classify("info: inference of MethodInstance exceeding 2501 frames\n", Level::Error),
+            Level::Info
+        );
+        assert_eq!(classify("┌ Error: Failed to instantiate\n", Level::Info), Level::Error);
+        assert_eq!(classify("│ some detail\n", Level::Error), Level::Error);
+        assert_eq!(classify("warning: deprecated flag\n", Level::Error), Level::Warn);
+        assert_eq!(classify("[WARN] slow request\n", Level::Error), Level::Warn);
+        assert_eq!(classify("Stacktrace:\n", Level::Info), Level::Error);
+        assert_eq!(classify("Information: not a level prefix\n", Level::Info), Level::Error);
     }
 }
