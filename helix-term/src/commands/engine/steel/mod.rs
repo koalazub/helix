@@ -4758,6 +4758,8 @@ callback : (-> any?)
     module.register_fn("send-lsp-notification", send_arbitrary_lsp_notification);
     module.register_fn("set-overlays!", set_plugin_overlays);
     module.register_fn("clear-overlays!", clear_plugin_overlays);
+    module.register_fn("set-style-overlays!", set_plugin_style_overlays);
+    module.register_fn("clear-style-overlays!", clear_plugin_style_overlays);
     module.register_fn("set-math-lines-above!", set_math_lines_above);
     module.register_fn("set-math-lines-below!", set_math_lines_below);
     module.register_fn("clear-math-lines!", clear_math_lines);
@@ -4772,6 +4774,18 @@ callback : (-> any?)
     ;; Use "" to hide a grapheme. Does not modify the buffer.
     (define (set-overlays! overlays)
         (helix.set-overlays! *helix.cx* overlays))
+    (provide set-style-overlays!)
+    ;;@doc
+    ;; nothelix: set markdown style highlights for the current view. Each span
+    ;; is a 3-element list (START-CHAR END-CHAR "theme.scope") applied over the
+    ;; char range; ranges must not overlap. Does not modify the buffer.
+    (define (set-style-overlays! spans)
+        (helix.set-style-overlays! *helix.cx* spans))
+    (provide clear-style-overlays!)
+    ;;@doc
+    ;; nothelix: clear all markdown style highlights for the current view.
+    (define (clear-style-overlays!)
+        (helix.clear-style-overlays! *helix.cx*))
             "#,
         );
     }
@@ -6726,6 +6740,72 @@ pub fn clear_plugin_overlays(cx: &mut Context) {
     };
     if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
         doc.clear_plugin_overlays(view_id);
+    }
+}
+
+/// nothelix: `(set-style-overlays! '((START END "markup.bold") ...))` — stash
+/// markdown style highlights (theme scope + char range) for the focused view.
+/// Ranges must not overlap; resolved against the active theme at render time.
+pub fn set_plugin_style_overlays(cx: &mut Context, spans_list: steel::rvals::SteelVal) {
+    let view_id = cx.editor.tree.focus;
+    if !cx.editor.tree.contains(view_id) {
+        return;
+    }
+    let doc_id = match cx.editor.tree.try_get(view_id) {
+        Some(v) => v.doc,
+        None => return,
+    };
+    let doc = match cx.editor.documents.get_mut(&doc_id) {
+        Some(d) => d,
+        None => return,
+    };
+
+    let mut spans: Vec<(String, std::ops::Range<usize>)> = Vec::new();
+
+    // spans_list is a list of (START-CHAR END-CHAR "theme.scope") triples.
+    if let steel::rvals::SteelVal::ListV(entries) = spans_list {
+        for entry in entries.iter() {
+            let parts: Vec<&steel::rvals::SteelVal> = match entry {
+                steel::rvals::SteelVal::ListV(p) => p.iter().collect(),
+                _ => continue,
+            };
+            if parts.len() < 3 {
+                continue;
+            }
+            let start = match parts[0] {
+                steel::rvals::SteelVal::IntV(i) => *i as usize,
+                _ => continue,
+            };
+            let end = match parts[1] {
+                steel::rvals::SteelVal::IntV(i) => *i as usize,
+                _ => continue,
+            };
+            let scope = match parts[2] {
+                steel::rvals::SteelVal::StringV(s) => s.to_string(),
+                _ => continue,
+            };
+            if end > start {
+                spans.push((scope, start..end));
+            }
+        }
+    }
+
+    spans.sort_by_key(|(_, range)| range.start);
+    doc.set_plugin_style_highlights(view_id, spans);
+}
+
+/// nothelix: clear markdown style highlights for the focused view.
+pub fn clear_plugin_style_overlays(cx: &mut Context) {
+    let view_id = cx.editor.tree.focus;
+    if !cx.editor.tree.contains(view_id) {
+        return;
+    }
+    let doc_id = match cx.editor.tree.try_get(view_id) {
+        Some(v) => v.doc,
+        None => return,
+    };
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        doc.clear_plugin_style_highlights(view_id);
     }
 }
 

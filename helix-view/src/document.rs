@@ -154,6 +154,11 @@ pub struct Document {
     /// Plugin-managed overlays for text concealment (e.g., LaTeX symbol rendering).
     /// Unlike jump_labels which are transient, these persist until explicitly cleared.
     pub plugin_overlays: HashMap<ViewId, Vec<Overlay>>,
+    /// nothelix: plugin-managed style highlights for in-buffer markdown
+    /// rendering. Each entry is a theme scope name (e.g. `markup.bold`) and the
+    /// char range it applies to; resolved against the active theme at render
+    /// time. Additive feature — empty/absent for stock behaviour.
+    pub plugin_style_highlights: HashMap<ViewId, Vec<(String, std::ops::Range<usize>)>>,
     /// Plugin-managed virtual lines rendered around math-bearing source
     /// lines. Mutate through [`Self::set_math_lines_above`] /
     /// [`Self::set_math_lines_below`] / [`Self::clear_math_lines`] /
@@ -789,6 +794,7 @@ impl Document {
             readonly: false,
             jump_labels: HashMap::new(),
             plugin_overlays: HashMap::new(),
+            plugin_style_highlights: HashMap::new(),
             math_lines: crate::annotations::math::MathLines::default(),
             raw_content: HashMap::new(),
             document_highlights: HashMap::new(),
@@ -1475,6 +1481,7 @@ impl Document {
         self.inlay_hints.remove(&view_id);
         self.jump_labels.remove(&view_id);
         self.plugin_overlays.remove(&view_id);
+        self.plugin_style_highlights.remove(&view_id);
         self.document_highlights.remove(&view_id);
         self.document_highlight_controllers.remove(&view_id);
         self.code_action_hints.remove(&view_id);
@@ -2515,6 +2522,20 @@ impl Document {
 
     pub fn clear_plugin_overlays(&mut self, view_id: ViewId) {
         self.plugin_overlays.remove(&view_id);
+    }
+
+    /// nothelix: set markdown style highlights (theme scope + char range) for a view.
+    pub fn set_plugin_style_highlights(
+        &mut self,
+        view_id: ViewId,
+        spans: Vec<(String, std::ops::Range<usize>)>,
+    ) {
+        self.plugin_style_highlights.insert(view_id, spans);
+    }
+
+    /// nothelix: clear markdown style highlights for a view.
+    pub fn clear_plugin_style_highlights(&mut self, view_id: ViewId) {
+        self.plugin_style_highlights.remove(&view_id);
     }
 
     pub fn add_raw_content(

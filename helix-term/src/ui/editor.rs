@@ -154,6 +154,8 @@ impl EditorView {
 
             Self::doc_diagnostics_highlights_into(doc, theme, &mut overlays);
 
+            Self::doc_plugin_style_highlights_into(doc, view_id, theme, &mut overlays);
+
             if is_focused {
                 if config.lsp.auto_document_highlight {
                     if let Some(overlay) = Self::doc_document_highlights(doc, view, theme) {
@@ -374,6 +376,35 @@ impl EditorView {
         let range = start..visible_range.end as u32;
 
         Some(syntax.rainbow_highlights(text, theme.rainbow_length(), loader, range))
+    }
+
+    /// nothelix: merge plugin-provided markdown style highlights. Each stored
+    /// span is a theme scope name resolved against the active theme, applied
+    /// over its char range. Purely additive; no-op when the plugin set none.
+    pub fn doc_plugin_style_highlights_into(
+        doc: &Document,
+        view_id: ViewId,
+        theme: &Theme,
+        overlay_highlights: &mut Vec<OverlayHighlights>,
+    ) {
+        let Some(spans) = doc.plugin_style_highlights.get(&view_id) else {
+            return;
+        };
+        if spans.is_empty() {
+            return;
+        }
+        let mut highlights: Vec<(syntax::Highlight, std::ops::Range<usize>)> =
+            Vec::with_capacity(spans.len());
+        for (scope, range) in spans {
+            if let Some(hl) = theme.find_highlight(scope) {
+                highlights.push((hl, range.clone()));
+            }
+        }
+        if highlights.is_empty() {
+            return;
+        }
+        highlights.sort_by_key(|(_, range)| range.start);
+        overlay_highlights.push(OverlayHighlights::Heterogenous { highlights });
     }
 
     /// Get highlight spans for document diagnostics
