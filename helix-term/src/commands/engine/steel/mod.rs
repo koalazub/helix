@@ -994,6 +994,84 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
         ));
     }
 
+    module.register_fn("clear-raw-content-in-range!", clear_raw_content_in_range);
+    if generate_sources {
+        pending_emits.push((
+            "clear-raw-content-in-range!".to_string(),
+            r#"
+(provide clear-raw-content-in-range!)
+;;@doc
+;; Remove only the raw-content entries whose image id falls in [lo, hi),
+;; leaving every other entry intact. Each image kind (plots / @image / tables /
+;; math) owns a disjoint id band, so a layer can refresh itself without wiping
+;; the others.
+(define (clear-raw-content-in-range! lo hi)
+    (helix.static.clear-raw-content-in-range! *helix.cx* lo hi))
+            "#
+            .to_string(),
+        ));
+    }
+
+    module.register_fn("set-math-lines-above!", set_math_lines_above);
+    if generate_sources {
+        pending_emits.push((
+            "set-math-lines-above!".to_string(),
+            r#"
+(provide set-math-lines-above!)
+;;@doc
+;; Stash the virtual lines rendered above source line LINE-IDX; '() clears it.
+(define (set-math-lines-above! line-idx lines)
+    (helix.static.set-math-lines-above! *helix.cx* line-idx lines))
+            "#
+            .to_string(),
+        ));
+    }
+
+    module.register_fn("set-math-lines-below!", set_math_lines_below);
+    if generate_sources {
+        pending_emits.push((
+            "set-math-lines-below!".to_string(),
+            r#"
+(provide set-math-lines-below!)
+;;@doc
+;; Stash the virtual lines rendered below source line LINE-IDX; '() clears it.
+(define (set-math-lines-below! line-idx lines)
+    (helix.static.set-math-lines-below! *helix.cx* line-idx lines))
+            "#
+            .to_string(),
+        ));
+    }
+
+    module.register_fn("clear-math-lines!", clear_math_lines);
+    if generate_sources {
+        pending_emits.push((
+            "clear-math-lines!".to_string(),
+            r#"
+(provide clear-math-lines!)
+;;@doc
+;; Drop both above- and below-math annotations for source line LINE-IDX.
+(define (clear-math-lines! line-idx)
+    (helix.static.clear-math-lines! *helix.cx* line-idx))
+            "#
+            .to_string(),
+        ));
+    }
+
+    module.register_fn("clear-all-math-lines!", clear_all_math_lines);
+    if generate_sources {
+        pending_emits.push((
+            "clear-all-math-lines!".to_string(),
+            r#"
+(provide clear-all-math-lines!)
+;;@doc
+;; Wipe every math annotation on the current document.
+(define (clear-all-math-lines!)
+    (helix.static.clear-all-math-lines! *helix.cx*))
+            "#
+            .to_string(),
+        ));
+    }
+
     let mut template_function_arity_5 = |name: &str, doc: &str| {
         if generate_sources {
             let docstring = format_docstring(doc);
@@ -4760,10 +4838,6 @@ callback : (-> any?)
     module.register_fn("clear-overlays!", clear_plugin_overlays);
     module.register_fn("set-style-overlays!", set_plugin_style_overlays);
     module.register_fn("clear-style-overlays!", clear_plugin_style_overlays);
-    module.register_fn("set-math-lines-above!", set_math_lines_above);
-    module.register_fn("set-math-lines-below!", set_math_lines_below);
-    module.register_fn("clear-math-lines!", clear_math_lines);
-    module.register_fn("clear-all-math-lines!", clear_all_math_lines);
     if generate_sources {
         builtin_misc_module.push_str(
             r#"
@@ -6956,6 +7030,20 @@ pub fn clear_raw_content(cx: &mut Context) {
     };
     if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
         doc.clear_raw_content(view_id);
+    }
+}
+
+pub fn clear_raw_content_in_range(cx: &mut Context, lo: usize, hi: usize) {
+    let view_id = cx.editor.tree.focus;
+    if !cx.editor.tree.contains(view_id) {
+        return;
+    }
+    let doc_id = match cx.editor.tree.try_get(view_id) {
+        Some(v) => v.doc,
+        None => return,
+    };
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        doc.clear_raw_content_in_range(view_id, lo as u64, hi as u64);
     }
 }
 

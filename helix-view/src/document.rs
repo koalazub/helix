@@ -1700,6 +1700,31 @@ impl Document {
             highlights.ranges = updated;
         }
 
+        // nothelix: keep plugin style-highlight (conceal) spans valid across
+        // edits, mirroring the document_highlights remap above — otherwise a
+        // span outlives a buffer shrink and the renderer slices the rope OOB.
+        for spans in self.plugin_style_highlights.values_mut() {
+            let text_len = self.text.len_chars();
+            let mut updated = Vec::with_capacity(spans.len());
+            for (scope, mut range) in spans.drain(..) {
+                changes.update_positions(
+                    [
+                        (&mut range.start, Assoc::After),
+                        (&mut range.end, Assoc::After),
+                    ]
+                    .into_iter(),
+                );
+                if range.start >= text_len {
+                    continue;
+                }
+                let end = range.end.min(text_len);
+                if range.start < end {
+                    updated.push((scope, range.start..end));
+                }
+            }
+            *spans = updated;
+        }
+
         helix_event::dispatch(DocumentDidChange {
             doc: self,
             view: view_id,
@@ -2595,6 +2620,17 @@ impl Document {
         self.raw_content.remove(&view_id);
     }
 
+    /// Drop only the raw-content entries whose `id` falls in `[lo, hi)`,
+    /// leaving every other entry intact. Plugins register disjoint id bands
+    /// per image kind (plots / @image paths / tables / math), so this lets one
+    /// kind refresh itself without wiping the others — which `clear_raw_content`
+    /// (whole-view) would do.
+    pub fn clear_raw_content_in_range(&mut self, view_id: ViewId, lo: u64, hi: u64) {
+        if let Some(entry) = self.raw_content.get_mut(&view_id) {
+            entry.retain(|rc| rc.id < lo || rc.id >= hi);
+        }
+    }
+
     /// Returns `true` if any raw content registered on this document has
     /// `is_animating` set, indicating continuous redraws are needed.
     pub fn has_animating_raw_content(&self) -> bool {
@@ -2797,6 +2833,49 @@ mod test {
                 range_length: None,
             }]
         );
+    }
+
+    #[test]
+    fn plugin_style_highlights_remapped_on_edit() {
+        let text = Rope::from("aaaaaaaaaaXXXXXXXXXX"); // 10 'a' + 10 'X' = 20 chars
+        let mut doc = Document::from(
+            text,
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        );
+        let view = ViewId::default();
+        doc.set_selection(view, Selection::single(0, 0));
+
+        doc.set_plugin_style_highlights(
+            view,
+            vec![
+                ("markup.heading".to_string(), 10..20), // straddles the delete, must remap
+                ("markup.bold".to_string(), 2..6),      // fully inside the delete, must drop
+                ("markup.italic".to_string(), 16..20),  // after the delete, must remap
+            ],
+        );
+
+        // Delete chars [0, 15): removes all 'a' + 5 'X'. New length = 5.
+        let transaction =
+            Transaction::change(doc.text(), vec![(0, 15, Some("".into()))].into_iter());
+        doc.apply(&transaction, view);
+
+        let new_len = doc.text().len_chars();
+        assert_eq!(new_len, 5);
+
+        let spans = doc
+            .plugin_style_highlights
+            .get(&view)
+            .expect("style highlights should survive apply");
+
+        for (scope, range) in spans {
+            assert!(
+                range.start < range.end && range.end <= new_len,
+                "stale span {scope:?} {range:?} exceeds rope len {new_len}"
+            );
+        }
+        assert_eq!(spans.len(), 2, "fully-deleted span should be dropped");
     }
 
     #[test]

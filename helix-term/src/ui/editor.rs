@@ -393,11 +393,19 @@ impl EditorView {
         if spans.is_empty() {
             return;
         }
+        let text_len = doc.text().len_chars();
         let mut highlights: Vec<(syntax::Highlight, std::ops::Range<usize>)> =
             Vec::with_capacity(spans.len());
         for (scope, range) in spans {
+            if range.start >= text_len {
+                continue;
+            }
+            let end = range.end.min(text_len);
+            if range.start >= end {
+                continue;
+            }
             if let Some(hl) = theme.find_highlight(scope) {
-                highlights.push((hl, range.clone()));
+                highlights.push((hl, range.start..end));
             }
         }
         if highlights.is_empty() {
