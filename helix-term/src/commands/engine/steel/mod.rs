@@ -24,7 +24,7 @@ use helix_event::register_hook;
 use helix_lsp::jsonrpc;
 use tui::graphics::{GraphicsProtocol, KittyProtocol};
 use helix_view::{
-    annotations::diagnostics::DiagnosticFilter,
+    annotations::{diagnostics::DiagnosticFilter, output::StyledSpan},
     document::{DocumentInlayHints, DocumentInlayHintsId, Mode},
     editor::{
         Action, AutoSave, BufferLine, ClippingConfiguration, ConfigEvent, CursorShapeConfig,
@@ -1086,6 +1086,9 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
 (provide set-output-lines-below!)
 ;;@doc
 ;; Stash the virtual lines rendered below source line LINE-IDX; '() clears it.
+;; Each row in LINES is either a plain string (monochrome, Plan 1 style) or a
+;; list of (text scope) pairs, where scope is a theme scope name string or
+;; #false for the decoration's default output style.
 (define (set-output-lines-below! line-idx lines)
     (helix.static.set-output-lines-below! *helix.cx* line-idx lines))
             "#
@@ -7019,6 +7022,10 @@ pub fn clear_all_math_lines(cx: &mut Context) {
     }
 }
 
+/// nothelix: each row is either a plain string (Plan 1, monochrome — becomes
+/// one no-scope span) or a list of `(text scope-or-false)` pairs (colored
+/// output — one styled span per pair). `scope` is a theme scope name string;
+/// `#false` means the decoration's default output style.
 pub fn set_output_lines_below(
     cx: &mut Context,
     line_idx: usize,
@@ -7036,11 +7043,36 @@ pub fn set_output_lines_below(
         None => return,
     };
 
-    let mut lines: Vec<String> = Vec::new();
+    let mut lines: Vec<Vec<StyledSpan>> = Vec::new();
     if let steel::rvals::SteelVal::ListV(items) = lines_val {
         for item in items.iter() {
-            if let steel::rvals::SteelVal::StringV(s) = item {
-                lines.push(s.to_string());
+            match item {
+                steel::rvals::SteelVal::StringV(s) => {
+                    lines.push(vec![StyledSpan::from(s.to_string())]);
+                }
+                steel::rvals::SteelVal::ListV(span_pairs) => {
+                    let mut row: Vec<StyledSpan> = Vec::new();
+                    for pair in span_pairs.iter() {
+                        let steel::rvals::SteelVal::ListV(parts) = pair else {
+                            continue;
+                        };
+                        let parts: Vec<&steel::rvals::SteelVal> = parts.iter().collect();
+                        if parts.len() < 2 {
+                            continue;
+                        }
+                        let text = match parts[0] {
+                            steel::rvals::SteelVal::StringV(s) => s.to_string(),
+                            _ => continue,
+                        };
+                        let scope = match parts[1] {
+                            steel::rvals::SteelVal::StringV(s) => Some(s.to_string()),
+                            _ => None,
+                        };
+                        row.push(StyledSpan { text, scope });
+                    }
+                    lines.push(row);
+                }
+                _ => {}
             }
         }
     }

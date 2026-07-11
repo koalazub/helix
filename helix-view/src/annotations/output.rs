@@ -3,6 +3,12 @@
 //! [`super::math::MathLines`], kept separate so math re-render
 //! (`clear_all_math_lines`) never wipes output and vice-versa. Rendered by
 //! `helix_term::ui::text_decorations::output_annotations::OutputAnnotations`.
+//!
+//! Each row is a sequence of [`StyledSpan`]s rather than a plain `String` so
+//! colored output (e.g. per-series braille text-plots) can paint different
+//! runs of a row with different theme scopes. A row built from a single
+//! plain string (via `StyledSpan::from`) is one no-scope span and renders
+//! identically to Plan 1's monochrome output.
 
 use std::collections::HashMap;
 
@@ -11,9 +17,38 @@ use helix_core::Position;
 
 use crate::Document;
 
+/// One styled run of text within an output row. `scope` is a theme scope
+/// name (e.g. `"ui.virtual.output.series0"`) resolved against the active
+/// theme at render time; `None` paints with the decoration's default output
+/// style.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StyledSpan {
+    pub text: String,
+    pub scope: Option<String>,
+}
+
+impl From<String> for StyledSpan {
+    fn from(text: String) -> Self {
+        StyledSpan { text, scope: None }
+    }
+}
+
+impl From<&str> for StyledSpan {
+    fn from(text: &str) -> Self {
+        StyledSpan {
+            text: text.to_string(),
+            scope: None,
+        }
+    }
+}
+
+/// A single virtual output line: an ordered sequence of styled spans that
+/// concatenate to the line's full text.
+pub type OutputRow = Vec<StyledSpan>;
+
 #[derive(Debug, Default, Clone)]
 pub struct OutputLines {
-    below: HashMap<usize, Vec<String>>,
+    below: HashMap<usize, Vec<OutputRow>>,
 }
 
 impl OutputLines {
@@ -21,11 +56,11 @@ impl OutputLines {
         self.below.is_empty()
     }
 
-    pub fn below(&self, line_idx: usize) -> Option<&[String]> {
+    pub fn below(&self, line_idx: usize) -> Option<&[OutputRow]> {
         self.below.get(&line_idx).map(Vec::as_slice)
     }
 
-    pub fn set_below(&mut self, line_idx: usize, lines: Vec<String>) {
+    pub fn set_below(&mut self, line_idx: usize, lines: Vec<OutputRow>) {
         if lines.is_empty() {
             self.below.remove(&line_idx);
         } else {
@@ -42,7 +77,7 @@ impl OutputLines {
     }
 
     pub fn rows_to_reserve_after(&self, doc_line: usize) -> usize {
-        self.below(doc_line).map(<[String]>::len).unwrap_or(0)
+        self.below(doc_line).map(<[OutputRow]>::len).unwrap_or(0)
     }
 }
 
@@ -67,5 +102,42 @@ impl LineAnnotation for OutputAnnotations<'_> {
         doc_line: usize,
     ) -> Position {
         Position::new(self.lines.rows_to_reserve_after(doc_line), 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn styled_row_round_trips_text_and_scopes() {
+        let mut lines = OutputLines::default();
+        let styled_row: OutputRow = vec![
+            StyledSpan {
+                text: "hi ".to_string(),
+                scope: Some("ui.virtual.output.series0".to_string()),
+            },
+            StyledSpan::from("there"),
+        ];
+        let plain_row: OutputRow = vec![StyledSpan::from("plain line".to_string())];
+
+        lines.set_below(3, vec![styled_row, plain_row]);
+
+        let below = lines.below(3).expect("rows were set for line 3");
+        assert_eq!(below.len(), 2);
+
+        let styled_text: String = below[0].iter().map(|span| span.text.as_str()).collect();
+        assert_eq!(styled_text, "hi there");
+        assert_eq!(
+            below[0][0].scope.as_deref(),
+            Some("ui.virtual.output.series0")
+        );
+        assert_eq!(below[0][1].scope, None);
+
+        assert_eq!(below[1].len(), 1);
+        assert_eq!(below[1][0].text, "plain line");
+        assert_eq!(below[1][0].scope, None);
+
+        assert_eq!(lines.rows_to_reserve_after(3), 2);
     }
 }

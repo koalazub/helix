@@ -1,4 +1,5 @@
 use helix_core::text_annotations::LineAnnotation;
+use helix_core::unicode::width::UnicodeWidthStr;
 use helix_core::Position;
 use helix_view::annotations::output::OutputLines;
 use helix_view::theme::Style;
@@ -9,20 +10,37 @@ use crate::ui::text_decorations::Decoration;
 
 pub struct OutputAnnotations<'a> {
     lines: &'a OutputLines,
-    style: Style,
+    theme: &'a Theme,
+    default_style: Style,
 }
 
 impl<'a> OutputAnnotations<'a> {
-    pub fn new(doc: &'a Document, theme: &Theme) -> Self {
+    pub fn new(doc: &'a Document, theme: &'a Theme) -> Self {
         let style = theme.get("ui.virtual.math");
-        let style = if style == Style::default() {
+        let default_style = if style == Style::default() {
             theme.get("ui.virtual.conceal")
         } else {
             style
         };
         Self {
             lines: doc.output_lines(),
-            style,
+            theme,
+            default_style,
+        }
+    }
+
+    /// Resolve a span's scope against the active theme, falling back to the
+    /// decoration's default output style when the span carries no scope or
+    /// the scope doesn't resolve to anything in the theme.
+    fn style_for_scope(&self, scope: Option<&str>) -> Style {
+        let Some(scope) = scope else {
+            return self.default_style;
+        };
+        let style = self.theme.get(scope);
+        if style == Style::default() {
+            self.default_style
+        } else {
+            style
         }
     }
 }
@@ -55,12 +73,17 @@ impl Decoration for OutputAnnotations<'_> {
         let viewport_height = renderer.viewport.height;
         let mut rows_used: u16 = 0;
 
-        for line in below.iter() {
-            let row = base_row + rows_used;
-            if row >= viewport_height {
+        for row in below.iter() {
+            let render_row = base_row + rows_used;
+            if render_row >= viewport_height {
                 break;
             }
-            renderer.set_string(0, row, line, self.style);
+            let mut col: u16 = 0;
+            for span in row.iter() {
+                let style = self.style_for_scope(span.scope.as_deref());
+                renderer.set_string(col, render_row, &span.text, style);
+                col += span.text.width() as u16;
+            }
             rows_used += 1;
         }
 

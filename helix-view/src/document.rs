@@ -2705,7 +2705,11 @@ impl Document {
         &self.math_lines
     }
 
-    pub fn set_output_lines_below(&mut self, line_idx: usize, lines: Vec<String>) {
+    pub fn set_output_lines_below(
+        &mut self,
+        line_idx: usize,
+        lines: Vec<crate::annotations::output::OutputRow>,
+    ) {
         self.output_lines.set_below(line_idx, lines);
     }
 
