@@ -1126,6 +1126,52 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
         ));
     }
 
+    module.register_fn("set-stale-tags-below!", set_stale_tags_below);
+    if generate_sources {
+        pending_emits.push((
+            "set-stale-tags-below!".to_string(),
+            r#"
+(provide set-stale-tags-below!)
+;;@doc
+;; Stash the stale-cell marker rendered below source line LINE-IDX; only the
+;; first string in LINES is used as the tag text. An empty list clears it.
+(define (set-stale-tags-below! line-idx lines)
+    (helix.static.set-stale-tags-below! *helix.cx* line-idx lines))
+            "#
+            .to_string(),
+        ));
+    }
+
+    module.register_fn("clear-stale-tags!", clear_stale_tags);
+    if generate_sources {
+        pending_emits.push((
+            "clear-stale-tags!".to_string(),
+            r#"
+(provide clear-stale-tags!)
+;;@doc
+;; Drop the stale-cell marker for source line LINE-IDX.
+(define (clear-stale-tags! line-idx)
+    (helix.static.clear-stale-tags! *helix.cx* line-idx))
+            "#
+            .to_string(),
+        ));
+    }
+
+    module.register_fn("clear-all-stale-tags!", clear_all_stale_tags);
+    if generate_sources {
+        pending_emits.push((
+            "clear-all-stale-tags!".to_string(),
+            r#"
+(provide clear-all-stale-tags!)
+;;@doc
+;; Wipe every stale-cell marker on the current document.
+(define (clear-all-stale-tags!)
+    (helix.static.clear-all-stale-tags! *helix.cx*))
+            "#
+            .to_string(),
+        ));
+    }
+
     let mut template_function_arity_5 = |name: &str, doc: &str| {
         if generate_sources {
             let docstring = format_docstring(doc);
@@ -7103,6 +7149,64 @@ pub fn clear_all_output_lines(cx: &mut Context) {
     };
     if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
         doc.clear_all_output_lines();
+    }
+}
+
+fn first_string_of(lines_val: steel::rvals::SteelVal) -> String {
+    if let steel::rvals::SteelVal::ListV(items) = lines_val {
+        for item in items.iter() {
+            if let steel::rvals::SteelVal::StringV(s) = item {
+                return s.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// `(set-stale-tags-below! LINE-IDX '("stale: x changed"))` — stash the
+/// stale-cell marker rendered below source line `LINE-IDX`. Only the first
+/// string in `lines` is used as the tag text; an empty list clears the
+/// entry. Mirrors `set-math-lines-below!`'s marshalling.
+pub fn set_stale_tags_below(cx: &mut Context, line_idx: usize, lines_val: steel::rvals::SteelVal) {
+    let text = first_string_of(lines_val);
+    let doc_id = {
+        let view_id = cx.editor.tree.focus;
+        match cx.editor.tree.try_get(view_id) {
+            Some(v) => v.doc,
+            None => return,
+        }
+    };
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        doc.set_stale_tag(line_idx, text);
+    }
+}
+
+/// Drop the stale-cell marker for a single source line.
+pub fn clear_stale_tags(cx: &mut Context, line_idx: usize) {
+    let doc_id = {
+        let view_id = cx.editor.tree.focus;
+        match cx.editor.tree.try_get(view_id) {
+            Some(v) => v.doc,
+            None => return,
+        }
+    };
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        doc.clear_stale_tag(line_idx);
+    }
+}
+
+/// Wipe every stale-cell marker on the current document — the plugin calls
+/// this before re-scanning downstream cells from scratch.
+pub fn clear_all_stale_tags(cx: &mut Context) {
+    let doc_id = {
+        let view_id = cx.editor.tree.focus;
+        match cx.editor.tree.try_get(view_id) {
+            Some(v) => v.doc,
+            None => return,
+        }
+    };
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        doc.clear_all_stale_tags();
     }
 }
 

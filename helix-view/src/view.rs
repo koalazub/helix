@@ -3,6 +3,7 @@ use crate::{
     annotations::diagnostics::InlineDiagnostics,
     annotations::math::MathAnnotations,
     annotations::output::OutputAnnotations,
+    annotations::stale_tags::StaleTagAnnotations,
     document::{DocumentColorSwatches, DocumentInlayHints},
     editor::{GutterConfig, GutterType},
     graphics::Rect,
@@ -550,6 +551,10 @@ impl View {
 
         if !doc.output_lines().is_empty() {
             text_annotations.add_line_annotation(OutputAnnotations::new(doc));
+        }
+
+        if !doc.stale_tags().is_empty() {
+            text_annotations.add_line_annotation(StaleTagAnnotations::new(doc));
         }
 
         // Add raw content (inline images, etc.)

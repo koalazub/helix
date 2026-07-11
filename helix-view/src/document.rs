@@ -165,6 +165,7 @@ pub struct Document {
     /// [`Self::clear_all_math_lines`]; read through [`Self::math_lines`].
     math_lines: crate::annotations::math::MathLines,
     output_lines: crate::annotations::output::OutputLines,
+    stale_tags: crate::annotations::stale_tags::StaleTags,
     /// LSP document highlights for each view, stored as char ranges.
     pub(crate) document_highlights: HashMap<ViewId, DocumentHighlights>,
     /// LSP code action hints for each view.
@@ -798,6 +799,7 @@ impl Document {
             plugin_style_highlights: HashMap::new(),
             math_lines: crate::annotations::math::MathLines::default(),
             output_lines: crate::annotations::output::OutputLines::default(),
+            stale_tags: crate::annotations::stale_tags::StaleTags::default(),
             raw_content: HashMap::new(),
             document_highlights: HashMap::new(),
             code_action_hints: HashSet::new(),
@@ -2723,6 +2725,28 @@ impl Document {
 
     pub fn output_lines(&self) -> &crate::annotations::output::OutputLines {
         &self.output_lines
+    }
+
+    /// Set (or, with an empty `text`, clear) the stale-cell marker rendered
+    /// below source line `line_idx`.
+    pub fn set_stale_tag(&mut self, line_idx: usize, text: String) {
+        self.stale_tags.set(line_idx, text);
+    }
+
+    /// Drop the stale-cell marker for a single source line.
+    pub fn clear_stale_tag(&mut self, line_idx: usize) {
+        self.stale_tags.clear_at(line_idx);
+    }
+
+    /// Wipe every stale-cell marker registered on this document. Called by
+    /// the nothelix plugin before re-scanning downstream cells from scratch.
+    pub fn clear_all_stale_tags(&mut self) {
+        self.stale_tags.clear();
+    }
+
+    /// Read-only access to the document's stale-tag annotations.
+    pub fn stale_tags(&self) -> &crate::annotations::stale_tags::StaleTags {
+        &self.stale_tags
     }
 
     /// Raw content (inline images, etc.) registered on `view_id`,

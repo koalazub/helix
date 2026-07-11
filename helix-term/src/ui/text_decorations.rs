@@ -9,10 +9,12 @@ use crate::ui::document::{LinePos, TextRenderer};
 pub use diagnostics::InlineDiagnostics;
 pub use math_annotations::MathAnnotations;
 pub use output_annotations::OutputAnnotations;
+pub use stale_tag_annotations::StaleTagAnnotations;
 
 mod diagnostics;
 mod math_annotations;
 mod output_annotations;
+mod stale_tag_annotations;
 
 /// Decorations are the primary mechanism for extending the text rendering.
 ///
