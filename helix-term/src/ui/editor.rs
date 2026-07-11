@@ -225,6 +225,9 @@ impl EditorView {
             if !doc.math_lines().is_empty() {
                 decorations.add_decoration(text_decorations::MathAnnotations::new(doc, theme));
             }
+            if !doc.output_lines().is_empty() {
+                decorations.add_decoration(text_decorations::OutputAnnotations::new(doc, theme));
+            }
             let raw = cx
                 .raw
                 .as_deref_mut()

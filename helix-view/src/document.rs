@@ -164,6 +164,7 @@ pub struct Document {
     /// [`Self::set_math_lines_below`] / [`Self::clear_math_lines`] /
     /// [`Self::clear_all_math_lines`]; read through [`Self::math_lines`].
     math_lines: crate::annotations::math::MathLines,
+    output_lines: crate::annotations::output::OutputLines,
     /// LSP document highlights for each view, stored as char ranges.
     pub(crate) document_highlights: HashMap<ViewId, DocumentHighlights>,
     /// LSP code action hints for each view.
@@ -796,6 +797,7 @@ impl Document {
             plugin_overlays: HashMap::new(),
             plugin_style_highlights: HashMap::new(),
             math_lines: crate::annotations::math::MathLines::default(),
+            output_lines: crate::annotations::output::OutputLines::default(),
             raw_content: HashMap::new(),
             document_highlights: HashMap::new(),
             code_action_hints: HashSet::new(),
@@ -2670,6 +2672,22 @@ impl Document {
     /// Read-only access to the document's math line annotations.
     pub fn math_lines(&self) -> &crate::annotations::math::MathLines {
         &self.math_lines
+    }
+
+    pub fn set_output_lines_below(&mut self, line_idx: usize, lines: Vec<String>) {
+        self.output_lines.set_below(line_idx, lines);
+    }
+
+    pub fn clear_output_lines_at(&mut self, line_idx: usize) {
+        self.output_lines.clear_at(line_idx);
+    }
+
+    pub fn clear_all_output_lines(&mut self) {
+        self.output_lines.clear();
+    }
+
+    pub fn output_lines(&self) -> &crate::annotations::output::OutputLines {
+        &self.output_lines
     }
 
     /// Raw content (inline images, etc.) registered on `view_id`,

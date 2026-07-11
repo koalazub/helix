@@ -8,9 +8,11 @@ use crate::ui::document::{LinePos, TextRenderer};
 
 pub use diagnostics::InlineDiagnostics;
 pub use math_annotations::MathAnnotations;
+pub use output_annotations::OutputAnnotations;
 
 mod diagnostics;
 mod math_annotations;
+mod output_annotations;
 
 /// Decorations are the primary mechanism for extending the text rendering.
 ///

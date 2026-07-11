@@ -1072,6 +1072,51 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
         ));
     }
 
+    module.register_fn("set-output-lines-below!", set_output_lines_below);
+    if generate_sources {
+        pending_emits.push((
+            "set-output-lines-below!".to_string(),
+            r#"
+(provide set-output-lines-below!)
+;;@doc
+;; Stash the virtual lines rendered below source line LINE-IDX; '() clears it.
+(define (set-output-lines-below! line-idx lines)
+    (helix.static.set-output-lines-below! *helix.cx* line-idx lines))
+            "#
+            .to_string(),
+        ));
+    }
+
+    module.register_fn("clear-output-lines-at!", clear_output_lines_at);
+    if generate_sources {
+        pending_emits.push((
+            "clear-output-lines-at!".to_string(),
+            r#"
+(provide clear-output-lines-at!)
+;;@doc
+;; Drop the output annotation for source line LINE-IDX.
+(define (clear-output-lines-at! line-idx)
+    (helix.static.clear-output-lines-at! *helix.cx* line-idx))
+            "#
+            .to_string(),
+        ));
+    }
+
+    module.register_fn("clear-all-output-lines!", clear_all_output_lines);
+    if generate_sources {
+        pending_emits.push((
+            "clear-all-output-lines!".to_string(),
+            r#"
+(provide clear-all-output-lines!)
+;;@doc
+;; Wipe every output annotation on the current document.
+(define (clear-all-output-lines!)
+    (helix.static.clear-all-output-lines! *helix.cx*))
+            "#
+            .to_string(),
+        ));
+    }
+
     let mut template_function_arity_5 = |name: &str, doc: &str| {
         if generate_sources {
             let docstring = format_docstring(doc);
@@ -6965,6 +7010,61 @@ pub fn clear_all_math_lines(cx: &mut Context) {
     };
     if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
         doc.clear_all_math_lines();
+    }
+}
+
+pub fn set_output_lines_below(
+    cx: &mut Context,
+    line_idx: usize,
+    lines_val: steel::rvals::SteelVal,
+) {
+    let doc_id = {
+        let view_id = cx.editor.tree.focus;
+        match cx.editor.tree.try_get(view_id) {
+            Some(v) => v.doc,
+            None => return,
+        }
+    };
+    let doc = match cx.editor.documents.get_mut(&doc_id) {
+        Some(d) => d,
+        None => return,
+    };
+
+    let mut lines: Vec<String> = Vec::new();
+    if let steel::rvals::SteelVal::ListV(items) = lines_val {
+        for item in items.iter() {
+            if let steel::rvals::SteelVal::StringV(s) = item {
+                lines.push(s.to_string());
+            }
+        }
+    }
+
+    doc.set_output_lines_below(line_idx, lines);
+}
+
+pub fn clear_output_lines_at(cx: &mut Context, line_idx: usize) {
+    let doc_id = {
+        let view_id = cx.editor.tree.focus;
+        match cx.editor.tree.try_get(view_id) {
+            Some(v) => v.doc,
+            None => return,
+        }
+    };
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        doc.clear_output_lines_at(line_idx);
+    }
+}
+
+pub fn clear_all_output_lines(cx: &mut Context) {
+    let doc_id = {
+        let view_id = cx.editor.tree.focus;
+        match cx.editor.tree.try_get(view_id) {
+            Some(v) => v.doc,
+            None => return,
+        }
+    };
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        doc.clear_all_output_lines();
     }
 }
 

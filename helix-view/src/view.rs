@@ -2,6 +2,7 @@ use crate::{
     align_view,
     annotations::diagnostics::InlineDiagnostics,
     annotations::math::MathAnnotations,
+    annotations::output::OutputAnnotations,
     document::{DocumentColorSwatches, DocumentInlayHints},
     editor::{GutterConfig, GutterType},
     graphics::Rect,
@@ -545,6 +546,10 @@ impl View {
         // helix_term::ui::text_decorations::MathAnnotations.
         if !doc.math_lines().is_empty() {
             text_annotations.add_line_annotation(MathAnnotations::new(doc));
+        }
+
+        if !doc.output_lines().is_empty() {
+            text_annotations.add_line_annotation(OutputAnnotations::new(doc));
         }
 
         // Add raw content (inline images, etc.)
