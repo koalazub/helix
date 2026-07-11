@@ -1793,14 +1793,19 @@ impl Document {
         } else if !self.changes.is_empty() {
             return false;
         }
-        let mut history = self.history.take();
-        let txn = if undo { history.undo() } else { history.redo() };
-        let success = if let Some(txn) = txn {
-            self.apply_impl(txn, view.id, true)
+        let txns = if undo {
+            self.history.get_mut().undo_user()
         } else {
-            false
+            self.history.get_mut().redo_user()
         };
-        self.history.set(history);
+        let mut success = false;
+        if let Some(txns) = txns {
+            for txn in &txns {
+                if self.apply_impl(txn, view.id, true) {
+                    success = true;
+                }
+            }
+        }
 
         if success {
             // reset changeset to fix len
@@ -1926,6 +1931,32 @@ impl Document {
 
         let mut history = self.history.take();
         history.commit_revision(&transaction, &old_state);
+        self.history.set(history);
+
+        // Update jumplist entries in the view.
+        view.apply(&transaction, self);
+    }
+
+    /// Commit pending changes to history tagged as plugin output.
+    ///
+    /// Mirrors [`Self::append_changes_to_history`] but marks the revision so that
+    /// user-facing undo/redo skips over it, reverting the output together with the
+    /// user edit that produced it.
+    pub fn append_changes_to_history_tagged(&mut self, view: &mut View) {
+        if self.changes.is_empty() {
+            return;
+        }
+
+        let new_changeset = ChangeSet::new(self.text().slice(..));
+        let changes = std::mem::replace(&mut self.changes, new_changeset);
+        let transaction =
+            Transaction::from(changes).with_selection(self.selection(view.id).clone());
+
+        // HAXX: we need to reconstruct the state as it was before the changes..
+        let old_state = self.old_state.take().expect("no old_state available");
+
+        let mut history = self.history.take();
+        history.commit_revision_tagged(&transaction, &old_state, true);
         self.history.set(history);
 
         // Update jumplist entries in the view.

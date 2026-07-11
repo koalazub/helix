@@ -63,6 +63,9 @@ struct Revision {
     // the deleted text.
     inversion: Transaction,
     timestamp: Instant,
+    /// Revisions tagged as plugin output are skipped by user-facing undo/redo so
+    /// one `u` reverts a user edit together with the output it produced.
+    output: bool,
 }
 
 impl Default for History {
@@ -75,6 +78,7 @@ impl Default for History {
                 transaction: Transaction::from(ChangeSet::new("".into())),
                 inversion: Transaction::from(ChangeSet::new("".into())),
                 timestamp: Instant::now(),
+                output: false,
             }],
             current: 0,
         }
@@ -105,8 +109,25 @@ impl History {
             transaction: transaction.clone(),
             inversion,
             timestamp,
+            output: false,
         });
         self.current = new_current;
+    }
+
+    /// Commit a revision tagged as plugin output. Output revisions are skipped by
+    /// [`Self::undo_user`]/[`Self::redo_user`] so a single user undo reverts both the
+    /// user edit and the output it produced. Behaves identically to
+    /// [`Self::commit_revision`] for untagged (`output == false`) revisions.
+    pub fn commit_revision_tagged(
+        &mut self,
+        transaction: &Transaction,
+        original: &State,
+        output: bool,
+    ) {
+        self.commit_revision_at_timestamp(transaction, original, Instant::now());
+        if let Some(rev) = self.revisions.last_mut() {
+            rev.output = output;
+        }
     }
 
     #[inline]
@@ -152,6 +173,60 @@ impl History {
         self.current = last_child.get();
 
         Some(&self.revisions[last_child.get()].transaction)
+    }
+
+    /// User-facing undo: revert output-tagged revisions together with the first
+    /// non-output (user) revision they follow, so a single `u` never lands on an
+    /// output-only state. Returns the inversions to apply in order, or `None` at
+    /// root. For a history with no tagged revisions this reverts exactly one
+    /// revision, identical to [`Self::undo`].
+    pub fn undo_user(&mut self) -> Option<Vec<Transaction>> {
+        if self.at_root() {
+            return None;
+        }
+        let mut node = self.current;
+        loop {
+            let output = self.revisions[node].output;
+            node = self.revisions[node].parent;
+            if !output || node == 0 {
+                break;
+            }
+        }
+        Some(self.jump_to(node))
+    }
+
+    /// User-facing redo: restore one non-output (user) revision plus any
+    /// output-tagged revisions that immediately follow it, stopping before the
+    /// next user revision. Returns the transactions to apply in order, or `None`
+    /// if there is nothing to redo. For a history with no tagged revisions this
+    /// restores exactly one revision, identical to [`Self::redo`].
+    pub fn redo_user(&mut self) -> Option<Vec<Transaction>> {
+        let mut node = self.current;
+        let in_unit = self.revisions[node]
+            .last_child
+            .is_some_and(|c| self.revisions[c.get()].output);
+        let mut target = None;
+        let mut seen_user = false;
+        loop {
+            let child = match self.revisions[node].last_child {
+                Some(c) => c.get(),
+                None => break,
+            };
+            let child_output = self.revisions[child].output;
+            if in_unit {
+                if !child_output {
+                    break;
+                }
+            } else if seen_user && !child_output {
+                break;
+            }
+            node = child;
+            target = Some(node);
+            if !child_output {
+                seen_user = true;
+            }
+        }
+        target.map(|t| self.jump_to(t))
     }
 
     // Get the position of last change
@@ -544,6 +619,266 @@ mod test {
 
         later(&mut history, &mut state, Steps(1));
         assert_eq!("a\n", state.doc);
+    }
+
+    #[test]
+    fn undo_user_skips_output_revisions() {
+        let mut history = History::default();
+        let mut state = State {
+            doc: Rope::from(""),
+            selection: Selection::point(0),
+        };
+
+        let t_a = Transaction::change(&state.doc, vec![(0, 0, Some("A".into()))].into_iter());
+        history.commit_revision(&t_a, &state);
+        t_a.apply(&mut state.doc);
+
+        let t_b = Transaction::change(&state.doc, vec![(1, 1, Some("B".into()))].into_iter());
+        history.commit_revision_tagged(&t_b, &state, true);
+        t_b.apply(&mut state.doc);
+
+        let txns = history.undo_user().expect("something to undo");
+        for t in &txns {
+            t.apply(&mut state.doc);
+        }
+        assert_eq!("", state.doc);
+        assert!(history.at_root());
+    }
+
+    #[test]
+    fn undo_user_stops_after_one_user_revision() {
+        let mut history = History::default();
+        let mut state = State {
+            doc: Rope::from(""),
+            selection: Selection::point(0),
+        };
+        for ch in ["A", "B"] {
+            let len = state.doc.len_chars();
+            let t = Transaction::change(
+                &state.doc,
+                vec![(len, len, Some(ch.into()))].into_iter(),
+            );
+            history.commit_revision(&t, &state);
+            t.apply(&mut state.doc);
+        }
+
+        let txns = history.undo_user().unwrap();
+        for t in &txns {
+            t.apply(&mut state.doc);
+        }
+        assert_eq!("A", state.doc);
+    }
+
+    #[test]
+    fn redo_user_restores_user_edit_and_following_output() {
+        let mut history = History::default();
+        let mut state = State {
+            doc: Rope::from(""),
+            selection: Selection::point(0),
+        };
+
+        let t_a = Transaction::change(&state.doc, vec![(0, 0, Some("A".into()))].into_iter());
+        history.commit_revision(&t_a, &state);
+        t_a.apply(&mut state.doc);
+
+        let t_b = Transaction::change(&state.doc, vec![(1, 1, Some("B".into()))].into_iter());
+        history.commit_revision_tagged(&t_b, &state, true);
+        t_b.apply(&mut state.doc);
+
+        for t in &history.undo_user().unwrap() {
+            t.apply(&mut state.doc);
+        }
+        assert_eq!("", state.doc);
+
+        let txns = history.redo_user().unwrap();
+        for t in &txns {
+            t.apply(&mut state.doc);
+        }
+        assert_eq!("AB", state.doc);
+    }
+
+    #[test]
+    fn untagged_history_undo_user_equals_undo() {
+        let mut history = History::default();
+        let mut state = State {
+            doc: Rope::from(""),
+            selection: Selection::point(0),
+        };
+
+        let t = Transaction::change(&state.doc, vec![(0, 0, Some("X".into()))].into_iter());
+        history.commit_revision(&t, &state);
+        t.apply(&mut state.doc);
+
+        let txns = history.undo_user().unwrap();
+        assert_eq!(1, txns.len());
+        for t in &txns {
+            t.apply(&mut state.doc);
+        }
+        assert_eq!("", state.doc);
+    }
+
+    fn adv_state() -> State {
+        State {
+            doc: Rope::from(""),
+            selection: Selection::point(0),
+        }
+    }
+
+    fn adv_append(history: &mut History, state: &mut State, ch: &str, output: bool) {
+        let len = state.doc.len_chars();
+        let t = Transaction::change(&state.doc, vec![(len, len, Some(ch.into()))].into_iter());
+        if output {
+            history.commit_revision_tagged(&t, state, true);
+        } else {
+            history.commit_revision(&t, state);
+        }
+        t.apply(&mut state.doc);
+    }
+
+    fn adv_apply(txns: &[Transaction], state: &mut State) {
+        for t in txns {
+            t.apply(&mut state.doc);
+        }
+    }
+
+    #[test]
+    fn adv_undo_user_at_root_returns_none() {
+        let mut history = History::default();
+        assert!(history.undo_user().is_none());
+        assert!(history.at_root());
+    }
+
+    #[test]
+    fn adv_redo_user_nothing_to_redo_returns_none() {
+        let mut history = History::default();
+        assert!(history.redo_user().is_none());
+        let mut state = adv_state();
+        adv_append(&mut history, &mut state, "A", false);
+        // At the tip, there is nothing to redo.
+        assert!(history.redo_user().is_none());
+    }
+
+    #[test]
+    fn adv_run_of_two_outputs() {
+        let mut history = History::default();
+        let mut state = adv_state();
+        adv_append(&mut history, &mut state, "U", false);
+        adv_append(&mut history, &mut state, "O", true);
+        adv_append(&mut history, &mut state, "P", true);
+        assert_eq!("UOP", state.doc);
+
+        let txns = history.undo_user().unwrap();
+        adv_apply(&txns, &mut state);
+        assert_eq!("", state.doc);
+        assert!(history.at_root());
+
+        let txns = history.redo_user().unwrap();
+        adv_apply(&txns, &mut state);
+        assert_eq!("UOP", state.doc);
+    }
+
+    #[test]
+    fn adv_alternating_user_output() {
+        let mut history = History::default();
+        let mut state = adv_state();
+        adv_append(&mut history, &mut state, "1", false);
+        adv_append(&mut history, &mut state, "a", true);
+        adv_append(&mut history, &mut state, "2", false);
+        adv_append(&mut history, &mut state, "b", true);
+        assert_eq!("1a2b", state.doc);
+
+        let txns = history.undo_user().unwrap();
+        adv_apply(&txns, &mut state);
+        assert_eq!("1a", state.doc);
+
+        let txns = history.undo_user().unwrap();
+        adv_apply(&txns, &mut state);
+        assert_eq!("", state.doc);
+        assert!(history.at_root());
+
+        let txns = history.redo_user().unwrap();
+        adv_apply(&txns, &mut state);
+        assert_eq!("1a", state.doc);
+
+        let txns = history.redo_user().unwrap();
+        adv_apply(&txns, &mut state);
+        assert_eq!("1a2b", state.doc);
+    }
+
+    #[test]
+    fn adv_leading_output_first_commit() {
+        let mut history = History::default();
+        let mut state = adv_state();
+        // The very first commit is tagged output (parent is root).
+        adv_append(&mut history, &mut state, "O", true);
+        assert_eq!("O", state.doc);
+
+        let txns = history.undo_user().unwrap();
+        adv_apply(&txns, &mut state);
+        assert_eq!("", state.doc);
+        assert!(history.at_root());
+
+        // Redo must bring the leading output back.
+        let txns = history.redo_user().unwrap();
+        adv_apply(&txns, &mut state);
+        assert_eq!("O", state.doc);
+    }
+
+    #[test]
+    fn adv_branching_with_output() {
+        let mut history = History::default();
+        let mut state = adv_state();
+        // First branch: U1, O1.
+        adv_append(&mut history, &mut state, "x", false);
+        adv_append(&mut history, &mut state, "y", true);
+        assert_eq!("xy", state.doc);
+
+        // Undo back to root, then commit a new branch: U2, O2.
+        let txns = history.undo_user().unwrap();
+        adv_apply(&txns, &mut state);
+        assert_eq!("", state.doc);
+
+        adv_append(&mut history, &mut state, "2", false);
+        adv_append(&mut history, &mut state, "b", true);
+        assert_eq!("2b", state.doc);
+
+        // Undo new branch.
+        let txns = history.undo_user().unwrap();
+        adv_apply(&txns, &mut state);
+        assert_eq!("", state.doc);
+
+        // Redo must follow last_child (the newer branch), not the old one.
+        let txns = history.redo_user().unwrap();
+        adv_apply(&txns, &mut state);
+        assert_eq!("2b", state.doc);
+    }
+
+    #[test]
+    fn adv_redo_user_from_midrun_via_earlier() {
+        // Reach a strictly mid-output-run `current` the way the real editor can:
+        // `:earlier` / raw undo (NOT undo_user). Structure: U, O1, O2, U2.
+        let mut history = History::default();
+        let mut state = adv_state();
+        adv_append(&mut history, &mut state, "u", false);
+        adv_append(&mut history, &mut state, "1", true);
+        adv_append(&mut history, &mut state, "2", true);
+        adv_append(&mut history, &mut state, "x", false);
+        assert_eq!("u12x", state.doc);
+
+        // Step back two revisions (u12x -> u12 -> u1) landing on O1, mid-run.
+        let t = history.undo().unwrap().clone();
+        t.apply(&mut state.doc);
+        let t = history.undo().unwrap().clone();
+        t.apply(&mut state.doc);
+        assert_eq!("u1", state.doc);
+
+        // One redo. From a mid-output-run `current`, redo restores only the
+        // remaining output(s) of the current unit and stops before the next
+        // user edit.
+        let txns = history.redo_user().unwrap();
+        adv_apply(&txns, &mut state);
+        // Restores O2 only; stops before the following user edit U2.
+        assert_eq!("u12", state.doc);
     }
 
     #[test]

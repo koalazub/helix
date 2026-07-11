@@ -945,6 +945,12 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
         "Commits any pending document changes to the undo history. Call this after document modifications in async callbacks to prevent selection tracking crashes."
     );
 
+    function0!(
+        "commit-output-changes-to-history!",
+        commit_output_changes_to_history,
+        "Commits any pending document changes to the undo history as an output-tagged revision that user undo/redo skip over. Call this after plugin output insertions in async callbacks to prevent selection tracking crashes."
+    );
+
     let mut template_function_arity_4 = |name: &str, doc: &str| {
         if generate_sources {
             let docstring = format_docstring(doc);
@@ -7087,6 +7093,16 @@ pub fn insert_string(cx: &mut Context, string: SteelString) {
 pub fn commit_changes_to_history(cx: &mut Context) {
     let (view, doc) = current!(cx.editor);
     doc.append_changes_to_history(view);
+}
+
+/// Commit any pending document changes to the undo history as an
+/// output-tagged revision that user undo/redo skip over.
+/// This must be called after plugin output insertions in async callbacks
+/// to prevent selection tracking crashes when EditorView::handle_event
+/// tries to commit stale changes.
+pub fn commit_output_changes_to_history(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+    doc.append_changes_to_history_tagged(view);
 }
 
 /// Add raw content (inline images, etc.) to the current document/view.
