@@ -79,6 +79,9 @@ where
     cursor_kind: CursorKind,
     /// Viewport
     viewport: Viewport,
+    /// Set to request a full clear. The erase is deferred to the next `flush` so it is emitted
+    /// inside the same synchronized-output frame as the repaint to avoid painting blank frames
+    force_clear: bool,
 }
 
 /// Default terminal size: 80 columns, 24 lines
@@ -120,6 +123,7 @@ where
             current: 0,
             cursor_kind: CursorKind::Block,
             viewport: options.viewport,
+            force_clear: false,
         })
     }
 
@@ -174,6 +178,10 @@ where
     }
 
     pub fn flush(&mut self) -> io::Result<()> {
+        if self.force_clear {
+            self.backend.clear()?;
+            self.force_clear = false;
+        }
         let previous_buffer = &self.buffers[1 - self.current];
         let current_buffer = &self.buffers[self.current];
         let previous_raw = &self.graphics[1 - self.current];
@@ -247,7 +255,6 @@ where
 
     /// Updates the Terminal so that internal buffers match the requested size. Requested size will
     /// be saved so the size can remain consistent when rendering.
-    /// This leads to a full clear of the screen.
     pub fn resize(&mut self, area: Rect) -> io::Result<()> {
         self.buffers[self.current].resize(area);
         self.buffers[1 - self.current].resize(area);
@@ -282,6 +289,9 @@ where
         // // Terminal. Thus, we're taking the important data out of the Frame and dropping it.
         // let cursor_position = frame.cursor_position;
 
+        // One synchronized frame for the whole draw
+        self.backend.start_sync()?;
+
         // Draw to stdout
         self.flush()?;
 
@@ -293,6 +303,8 @@ where
             CursorKind::Hidden => self.hide_cursor()?,
             kind => self.show_cursor(kind)?,
         }
+
+        self.backend.end_sync()?;
 
         // Swap buffers and graphics surfaces in lockstep.
         self.buffers[1 - self.current].reset();
@@ -326,10 +338,15 @@ where
     }
 
     /// Clear the terminal and force a full redraw on the next draw call.
+    ///
+    /// The physical erase is deferred to the next `flush` so it shares a
+    /// synchronized frame with the repaint.
     pub fn clear(&mut self) -> io::Result<()> {
-        self.backend.clear()?;
+        self.force_clear = true;
         // Reset the back buffer + graphics so the next update will
         // redraw everything (including retransmitting cached images).
+        // The physical erase is deferred to the next `flush` so it shares
+        // a synchronized frame with the repaint.
         self.buffers[1 - self.current].reset();
         self.graphics[1 - self.current].clear();
         Ok(())
