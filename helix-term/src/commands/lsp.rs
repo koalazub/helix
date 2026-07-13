@@ -1,6 +1,5 @@
 use futures_util::{stream::FuturesUnordered, FutureExt};
 use helix_lsp::{
-    block_on,
     lsp::{
         self, CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionTriggerKind,
         DiagnosticSeverity, NumberOrString,
@@ -1183,6 +1182,19 @@ pub fn rename_symbol(cx: &mut Context) {
         }
     }
 
+    fn workspace_edit_is_versioned(edit: &lsp::WorkspaceEdit) -> bool {
+        match &edit.document_changes {
+            Some(lsp::DocumentChanges::Edits(edits)) => {
+                edits.iter().all(|edit| edit.text_document.version.is_some())
+            }
+            Some(lsp::DocumentChanges::Operations(ops)) => ops.iter().all(|op| match op {
+                lsp::DocumentChangeOperation::Edit(edit) => edit.text_document.version.is_some(),
+                lsp::DocumentChangeOperation::Op(_) => true,
+            }),
+            None => false,
+        }
+    }
+
     fn create_rename_prompt(
         editor: &Editor,
         prefill: String,
@@ -1198,6 +1210,8 @@ pub fn rename_symbol(cx: &mut Context) {
                     return;
                 }
                 let (view, doc) = current!(cx.editor);
+                let doc_id = doc.id();
+                let doc_version = doc.version();
 
                 let Some(language_server) = doc
                     .language_servers_with_feature(LanguageServerFeature::RenameSymbol)
@@ -1214,14 +1228,27 @@ pub fn rename_symbol(cx: &mut Context) {
                     .rename_symbol(doc.identifier(), pos, input.to_string())
                     .unwrap();
 
-                match block_on(future) {
-                    Ok(edits) => {
-                        let _ = cx
-                            .editor
-                            .apply_workspace_edit(offset_encoding, &edits.unwrap_or_default());
-                    }
-                    Err(err) => cx.editor.set_error(err.to_string()),
-                }
+                cx.editor.set_status("renaming…");
+                cx.jobs.callback(async move {
+                    let edits = future.await;
+                    let call = move |editor: &mut Editor, _compositor: &mut Compositor| match edits {
+                        Ok(edits) => {
+                            let edits = edits.unwrap_or_default();
+                            let source_changed = editor
+                                .document(doc_id)
+                                .is_none_or(|doc| doc.version() != doc_version);
+                            if source_changed && !workspace_edit_is_versioned(&edits) {
+                                editor.set_status(
+                                    "rename response arrived after buffer changed — rerun",
+                                );
+                                return;
+                            }
+                            let _ = editor.apply_workspace_edit(offset_encoding, &edits);
+                        }
+                        Err(err) => editor.set_error(err.to_string()),
+                    };
+                    Ok(Callback::EditorCompositor(Box::new(call)))
+                });
             },
         )
         .with_line(prefill, editor);
