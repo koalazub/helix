@@ -621,9 +621,9 @@ impl<'a> TextAnnotations<'a> {
     }
 
     pub(crate) fn raw_content_at(&self, char_idx: usize) -> Option<&RawContent> {
-        self.raw_content.iter().find_map(|layer| {
-            layer.consume(char_idx, |annot| annot.char_idx)
-        })
+        self.raw_content
+            .iter()
+            .find_map(|layer| layer.consume(char_idx, |annot| annot.char_idx))
     }
 
     pub(crate) fn process_virtual_text_anchors(&self, grapheme: &FormattedGrapheme) {

@@ -1,8 +1,8 @@
 pub mod backend;
 pub mod buffer;
+pub mod extension;
 pub mod graphics;
 pub mod layout;
-pub mod extension;
 pub mod symbols;
 pub mod terminal;
 pub mod text;

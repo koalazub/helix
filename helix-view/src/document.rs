@@ -1676,9 +1676,7 @@ impl Document {
                 continue;
             }
             raw_contents.remap_positions(old_len, new_len, |rcs| {
-                changes.update_positions(
-                    rcs.iter_mut().map(|rc| (&mut rc.char_idx, Assoc::After)),
-                );
+                changes.update_positions(rcs.iter_mut().map(|rc| (&mut rc.char_idx, Assoc::After)));
             });
         }
 
@@ -3148,14 +3146,20 @@ mod test {
         doc.add_raw_content(view_id, raw_content);
 
         // Verify raw_content is present
-        assert!(!doc.raw_content.is_empty(), "raw_content should have an entry");
+        assert!(
+            !doc.raw_content.is_empty(),
+            "raw_content should have an entry"
+        );
 
         // Reload the document
         let provider_registry = helix_vcs::DiffProviderRegistry::default();
         doc.reload(&mut view, &provider_registry, true).unwrap();
 
         // Verify raw_content is cleared after reload
-        assert!(doc.raw_content.is_empty(), "raw_content should be cleared after reload");
+        assert!(
+            doc.raw_content.is_empty(),
+            "raw_content should be cleared after reload"
+        );
     }
 
     #[test]

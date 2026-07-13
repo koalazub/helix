@@ -654,10 +654,7 @@ mod test {
         };
         for ch in ["A", "B"] {
             let len = state.doc.len_chars();
-            let t = Transaction::change(
-                &state.doc,
-                vec![(len, len, Some(ch.into()))].into_iter(),
-            );
+            let t = Transaction::change(&state.doc, vec![(len, len, Some(ch.into()))].into_iter());
             history.commit_revision(&t, &state);
             t.apply(&mut state.doc);
         }

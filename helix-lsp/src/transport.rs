@@ -566,20 +566,41 @@ mod tests {
         let classify = |line, last| Transport::classify_stderr_line(line, last);
         assert_eq!(classify("[ Info: Using stdio\n", Level::Error), Level::Info);
         assert_eq!(
-            classify("┌ Info: Running JETLS with the following setup:\n", Level::Error),
+            classify(
+                "┌ Info: Running JETLS with the following setup:\n",
+                Level::Error
+            ),
             Level::Info
         );
-        assert_eq!(classify("│   Sys.BINDIR = \"...\"\n", Level::Info), Level::Info);
-        assert_eq!(classify("└   JETLS_DEBUG_LOWERING = false\n", Level::Info), Level::Info);
         assert_eq!(
-            classify("info: inference of MethodInstance exceeding 2501 frames\n", Level::Error),
+            classify("│   Sys.BINDIR = \"...\"\n", Level::Info),
             Level::Info
         );
-        assert_eq!(classify("┌ Error: Failed to instantiate\n", Level::Info), Level::Error);
+        assert_eq!(
+            classify("└   JETLS_DEBUG_LOWERING = false\n", Level::Info),
+            Level::Info
+        );
+        assert_eq!(
+            classify(
+                "info: inference of MethodInstance exceeding 2501 frames\n",
+                Level::Error
+            ),
+            Level::Info
+        );
+        assert_eq!(
+            classify("┌ Error: Failed to instantiate\n", Level::Info),
+            Level::Error
+        );
         assert_eq!(classify("│ some detail\n", Level::Error), Level::Error);
-        assert_eq!(classify("warning: deprecated flag\n", Level::Error), Level::Warn);
+        assert_eq!(
+            classify("warning: deprecated flag\n", Level::Error),
+            Level::Warn
+        );
         assert_eq!(classify("[WARN] slow request\n", Level::Error), Level::Warn);
         assert_eq!(classify("Stacktrace:\n", Level::Info), Level::Error);
-        assert_eq!(classify("Information: not a level prefix\n", Level::Info), Level::Error);
+        assert_eq!(
+            classify("Information: not a level prefix\n", Level::Info),
+            Level::Error
+        );
     }
 }

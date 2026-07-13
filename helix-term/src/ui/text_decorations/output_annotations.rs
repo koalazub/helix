@@ -1,12 +1,15 @@
 use helix_core::text_annotations::LineAnnotation;
 use helix_core::unicode::width::UnicodeWidthStr;
 use helix_core::Position;
-use helix_view::annotations::output::{OutputLines, OutputRow};
+use helix_view::annotations::output::{OutputLines, StyledSpan};
 use helix_view::theme::Style;
 use helix_view::{Document, Theme};
 
 use crate::ui::document::{LinePos, TextRenderer};
 use crate::ui::text_decorations::Decoration;
+
+const BAR_GLYPH: &str = "▏";
+const BAR_WIDTH: u16 = 1;
 
 pub struct OutputAnnotations<'a> {
     lines: &'a OutputLines,
@@ -80,7 +83,26 @@ impl Decoration for OutputAnnotations<'_> {
             if render_row >= viewport_height {
                 break;
             }
-            for draw in plan_row(row, viewport_width) {
+            let bar_width = if row.bar_scope.is_some() {
+                BAR_WIDTH
+            } else {
+                0
+            };
+            if let Some(bar_scope) = row.bar_scope.as_deref() {
+                if bar_width <= viewport_width {
+                    let style = self.style_for_scope(Some(bar_scope));
+                    renderer.set_string_truncated(
+                        viewport_x,
+                        render_row,
+                        BAR_GLYPH,
+                        bar_width as usize,
+                        |_| style,
+                        false,
+                        false,
+                    );
+                }
+            }
+            for draw in plan_row(&row.spans, bar_width, viewport_width) {
                 let style = self.style_for_scope(draw.span.scope.as_deref());
                 renderer.set_string_truncated(
                     viewport_x + draw.col,
@@ -110,14 +132,10 @@ struct SpanDraw<'a> {
     truncated: bool,
 }
 
-/// Compute the clamped sequence of span draws for one output row so no glyph
-/// is painted past `width`. Spans starting at or beyond the right edge are
-/// dropped; the first span that overruns the edge is the last drawn and is
-/// flagged for ellipsis truncation.
-fn plan_row(row: &OutputRow, width: u16) -> Vec<SpanDraw<'_>> {
+fn plan_row(spans: &[StyledSpan], start_col: u16, width: u16) -> Vec<SpanDraw<'_>> {
     let mut plan = Vec::new();
-    let mut col: u16 = 0;
-    for span in row.iter() {
+    let mut col: u16 = start_col.min(width);
+    for span in spans.iter() {
         if col >= width {
             break;
         }
@@ -141,16 +159,15 @@ fn plan_row(row: &OutputRow, width: u16) -> Vec<SpanDraw<'_>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use helix_view::annotations::output::StyledSpan;
 
-    fn row(texts: &[&str]) -> OutputRow {
+    fn spans(texts: &[&str]) -> Vec<StyledSpan> {
         texts.iter().map(|t| StyledSpan::from(*t)).collect()
     }
 
     #[test]
     fn narrow_row_is_untruncated() {
-        let r = row(&["abc", "de"]);
-        let plan = plan_row(&r, 80);
+        let r = spans(&["abc", "de"]);
+        let plan = plan_row(&r, 0, 80);
         assert_eq!(plan.len(), 2);
         assert!(plan.iter().all(|d| !d.truncated));
         assert_eq!(plan[0].col, 0);
@@ -159,8 +176,8 @@ mod tests {
 
     #[test]
     fn overrunning_row_truncates_at_edge() {
-        let r = row(&["0123456789", "abcdefghij"]);
-        let plan = plan_row(&r, 15);
+        let r = spans(&["0123456789", "abcdefghij"]);
+        let plan = plan_row(&r, 0, 15);
         assert_eq!(plan.len(), 2);
         assert!(!plan[0].truncated);
         assert!(plan[1].truncated);
@@ -173,8 +190,8 @@ mod tests {
 
     #[test]
     fn spans_past_edge_are_dropped() {
-        let r = row(&["0123456789", "over", "more"]);
-        let plan = plan_row(&r, 8);
+        let r = spans(&["0123456789", "over", "more"]);
+        let plan = plan_row(&r, 0, 8);
         assert_eq!(plan.len(), 1);
         assert!(plan[0].truncated);
         assert_eq!(plan[0].col, 0);
@@ -183,10 +200,33 @@ mod tests {
 
     #[test]
     fn single_span_wider_than_viewport_truncates() {
-        let r = row(&["this is a very long single logical output line"]);
-        let plan = plan_row(&r, 10);
+        let r = spans(&["this is a very long single logical output line"]);
+        let plan = plan_row(&r, 0, 10);
         assert_eq!(plan.len(), 1);
         assert!(plan[0].truncated);
         assert_eq!(plan[0].remaining, 10);
+    }
+
+    #[test]
+    fn bar_shifts_text_right_and_stays_within_width() {
+        let r = spans(&["hello"]);
+        let plan = plan_row(&r, BAR_WIDTH, 80);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].col, BAR_WIDTH);
+        assert_eq!(plan[0].remaining, 80 - BAR_WIDTH);
+        assert!(!plan[0].truncated);
+        for d in &plan {
+            assert!(d.col + BAR_WIDTH <= 80 + BAR_WIDTH);
+        }
+    }
+
+    #[test]
+    fn bar_offset_at_viewport_edge_drops_text() {
+        let r = spans(&["x"]);
+        let plan = plan_row(&r, BAR_WIDTH, BAR_WIDTH);
+        assert_eq!(plan.len(), 1);
+        assert!(plan[0].truncated);
+        assert_eq!(plan[0].col, BAR_WIDTH);
+        assert_eq!(plan[0].remaining, 0);
     }
 }

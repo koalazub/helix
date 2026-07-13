@@ -42,9 +42,30 @@ impl From<&str> for StyledSpan {
     }
 }
 
-/// A single virtual output line: an ordered sequence of styled spans that
-/// concatenate to the line's full text.
-pub type OutputRow = Vec<StyledSpan>;
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OutputRow {
+    pub bar_scope: Option<String>,
+    pub spans: Vec<StyledSpan>,
+}
+
+impl OutputRow {
+    pub fn new(spans: Vec<StyledSpan>) -> Self {
+        OutputRow {
+            bar_scope: None,
+            spans,
+        }
+    }
+
+    pub fn with_bar(bar_scope: Option<String>, spans: Vec<StyledSpan>) -> Self {
+        OutputRow { bar_scope, spans }
+    }
+}
+
+impl FromIterator<StyledSpan> for OutputRow {
+    fn from_iter<I: IntoIterator<Item = StyledSpan>>(iter: I) -> Self {
+        OutputRow::new(iter.into_iter().collect())
+    }
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct OutputLines {
@@ -130,31 +151,43 @@ mod tests {
     #[test]
     fn styled_row_round_trips_text_and_scopes() {
         let mut lines = OutputLines::default();
-        let styled_row: OutputRow = vec![
-            StyledSpan {
-                text: "hi ".to_string(),
-                scope: Some("ui.virtual.output.series0".to_string()),
-            },
-            StyledSpan::from("there"),
-        ];
-        let plain_row: OutputRow = vec![StyledSpan::from("plain line".to_string())];
+        let styled_row = OutputRow::with_bar(
+            Some("ui.virtual.output.series1".to_string()),
+            vec![
+                StyledSpan {
+                    text: "hi ".to_string(),
+                    scope: Some("ui.virtual.output.series0".to_string()),
+                },
+                StyledSpan::from("there"),
+            ],
+        );
+        let plain_row = OutputRow::new(vec![StyledSpan::from("plain line".to_string())]);
 
         lines.set_below(3, vec![styled_row, plain_row]);
 
         let below = lines.below(3).expect("rows were set for line 3");
         assert_eq!(below.len(), 2);
 
-        let styled_text: String = below[0].iter().map(|span| span.text.as_str()).collect();
+        let styled_text: String = below[0]
+            .spans
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect();
         assert_eq!(styled_text, "hi there");
         assert_eq!(
-            below[0][0].scope.as_deref(),
+            below[0].bar_scope.as_deref(),
+            Some("ui.virtual.output.series1")
+        );
+        assert_eq!(
+            below[0].spans[0].scope.as_deref(),
             Some("ui.virtual.output.series0")
         );
-        assert_eq!(below[0][1].scope, None);
+        assert_eq!(below[0].spans[1].scope, None);
 
-        assert_eq!(below[1].len(), 1);
-        assert_eq!(below[1][0].text, "plain line");
-        assert_eq!(below[1][0].scope, None);
+        assert_eq!(below[1].spans.len(), 1);
+        assert_eq!(below[1].bar_scope, None);
+        assert_eq!(below[1].spans[0].text, "plain line");
+        assert_eq!(below[1].spans[0].scope, None);
 
         assert_eq!(lines.rows_to_reserve_after(3), 2);
     }
@@ -162,8 +195,8 @@ mod tests {
     #[test]
     fn remap_lines_shifts_keys_and_drops_none() {
         let mut lines = OutputLines::default();
-        lines.set_below(5, vec![vec![StyledSpan::from("shifted")]]);
-        lines.set_below(2, vec![vec![StyledSpan::from("dropped")]]);
+        lines.set_below(5, vec![OutputRow::new(vec![StyledSpan::from("shifted")])]);
+        lines.set_below(2, vec![OutputRow::new(vec![StyledSpan::from("dropped")])]);
 
         // Simulate an insertion at line 3 that pushes lines >= 3 down by 2,
         // while line 2 (above the edit) is deleted -> None.
@@ -172,6 +205,6 @@ mod tests {
         assert!(lines.below(5).is_none());
         assert!(lines.below(2).is_none());
         let moved = lines.below(7).expect("line 5 rows moved to line 7");
-        assert_eq!(moved[0][0].text, "shifted");
+        assert_eq!(moved[0].spans[0].text, "shifted");
     }
 }

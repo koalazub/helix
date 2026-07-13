@@ -1184,9 +1184,9 @@ pub fn rename_symbol(cx: &mut Context) {
 
     fn workspace_edit_is_versioned(edit: &lsp::WorkspaceEdit) -> bool {
         match &edit.document_changes {
-            Some(lsp::DocumentChanges::Edits(edits)) => {
-                edits.iter().all(|edit| edit.text_document.version.is_some())
-            }
+            Some(lsp::DocumentChanges::Edits(edits)) => edits
+                .iter()
+                .all(|edit| edit.text_document.version.is_some()),
             Some(lsp::DocumentChanges::Operations(ops)) => ops.iter().all(|op| match op {
                 lsp::DocumentChangeOperation::Edit(edit) => edit.text_document.version.is_some(),
                 lsp::DocumentChangeOperation::Op(_) => true,
@@ -1231,7 +1231,8 @@ pub fn rename_symbol(cx: &mut Context) {
                 cx.editor.set_status("renaming…");
                 cx.jobs.callback(async move {
                     let edits = future.await;
-                    let call = move |editor: &mut Editor, _compositor: &mut Compositor| match edits {
+                    let call = move |editor: &mut Editor, _compositor: &mut Compositor| match edits
+                    {
                         Ok(edits) => {
                             let edits = edits.unwrap_or_default();
                             let source_changed = editor

@@ -229,8 +229,7 @@ impl EditorView {
                 decorations.add_decoration(text_decorations::OutputAnnotations::new(doc, theme));
             }
             if !doc.stale_tags().is_empty() {
-                decorations
-                    .add_decoration(text_decorations::StaleTagAnnotations::new(doc, theme));
+                decorations.add_decoration(text_decorations::StaleTagAnnotations::new(doc, theme));
             }
             let raw = cx
                 .raw

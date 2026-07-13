@@ -57,6 +57,15 @@ label = "label"
 
 "ui.virtual.indent-guide" = { fg = "window_color" }
 
+"ui.virtual.output.series0" = { fg = "#f43f5e" }
+"ui.virtual.output.series1" = { fg = "#ffcd1c" }
+"ui.virtual.output.series2" = { fg = "#6ee7b7" }
+"ui.virtual.output.series3" = { fg = "#38bdf8" }
+"ui.virtual.output.series4" = { fg = "#6366f1" }
+"ui.virtual.output.series5" = { fg = "#a4a0e8" }
+"ui.virtual.output.series6" = { fg = "#eccdba" }
+"ui.virtual.output.series7" = { fg = "#10b981" }
+
 "ui.selection" = { bg = "#4f46e5" }
 "ui.selection.primary" = { bg = "#4f46e5" }
 "ui.cursor.select" = { bg = "cursor_normal_bg_color" }

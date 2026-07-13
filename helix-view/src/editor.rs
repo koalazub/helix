@@ -4,7 +4,9 @@ use crate::{
     document::{
         DocumentOpenError, DocumentSavedEventFuture, DocumentSavedEventResult, Mode, SavePoint,
     },
-    events::{DocumentDidClose, DocumentDidOpen, DocumentFocusGained, DocumentFocusLost, DocumentSaved},
+    events::{
+        DocumentDidClose, DocumentDidOpen, DocumentFocusGained, DocumentFocusLost, DocumentSaved,
+    },
     graphics::{CursorKind, Rect},
     handlers::Handlers,
     info::Info,
@@ -1549,7 +1551,9 @@ impl Editor {
     /// on screen.  Used by the redraw loop to choose a tighter debounce
     /// interval while animations are running.
     pub fn any_doc_has_animating_content(&self) -> bool {
-        self.documents.values().any(|d| d.has_animating_raw_content())
+        self.documents
+            .values()
+            .any(|d| d.has_animating_raw_content())
     }
 
     /// Call if the config has changed to let the editor update all

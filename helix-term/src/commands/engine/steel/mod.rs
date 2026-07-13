@@ -12,8 +12,8 @@ use helix_core::{
     syntax::{
         self,
         config::{
-            default_timeout, AutoPairConfig, LanguageConfiguration,
-            LanguageServerConfiguration, SoftWrap,
+            default_timeout, AutoPairConfig, LanguageConfiguration, LanguageServerConfiguration,
+            SoftWrap,
         },
         LanguageLoader,
     },
@@ -22,9 +22,11 @@ use helix_core::{
 };
 use helix_event::register_hook;
 use helix_lsp::jsonrpc;
-use tui::graphics::{GraphicsProtocol, KittyProtocol};
 use helix_view::{
-    annotations::{diagnostics::DiagnosticFilter, output::StyledSpan},
+    annotations::{
+        diagnostics::DiagnosticFilter,
+        output::{OutputRow, StyledSpan},
+    },
     document::{DocumentInlayHints, DocumentInlayHintsId, Mode},
     editor::{
         Action, AutoSave, BufferLine, ClippingConfiguration, ConfigEvent, CursorShapeConfig,
@@ -56,6 +58,7 @@ use steel::{
     steelerr, RootedSteelVal, SteelErr, SteelVal,
 };
 use termina::EventReader;
+use tui::graphics::{GraphicsProtocol, KittyProtocol};
 
 use std::{
     borrow::Cow,
@@ -682,16 +685,28 @@ mod static_scm_dedup_tests {
 
     #[test]
     fn parse_provide_handles_simple_name() {
-        assert_eq!(parse_provide_name("(provide insert_char)"), Some("insert_char"));
+        assert_eq!(
+            parse_provide_name("(provide insert_char)"),
+            Some("insert_char")
+        );
     }
 
     #[test]
     fn parse_provide_handles_scheme_idioms() {
         // Names like cx->current-file and range->selection are valid Scheme
         // identifiers and the parser must accept the > and -> characters.
-        assert_eq!(parse_provide_name("(provide cx->current-file)"), Some("cx->current-file"));
-        assert_eq!(parse_provide_name("(provide range->selection)"), Some("range->selection"));
-        assert_eq!(parse_provide_name("(provide lsp-client-initialized?)"), Some("lsp-client-initialized?"));
+        assert_eq!(
+            parse_provide_name("(provide cx->current-file)"),
+            Some("cx->current-file")
+        );
+        assert_eq!(
+            parse_provide_name("(provide range->selection)"),
+            Some("range->selection")
+        );
+        assert_eq!(
+            parse_provide_name("(provide lsp-client-initialized?)"),
+            Some("lsp-client-initialized?")
+        );
     }
 
     #[test]
@@ -762,7 +777,10 @@ mod static_scm_dedup_tests {
             .lines()
             .filter(|l| l.trim() == "(provide cx->current-file)")
             .count();
-        assert_eq!(provide_count, 1, "expected exactly one provide, got:\n{final_text}");
+        assert_eq!(
+            provide_count, 1,
+            "expected exactly one provide, got:\n{final_text}"
+        );
 
         // The alias form must be gone; the wrapper form must remain.
         assert!(!final_text.contains("(define cx->current-file helix.static.cx->current-file)"));
@@ -784,12 +802,22 @@ mod static_scm_dedup_tests {
             header,
             blocks,
             vec![
-                ("first".to_string(), "(provide first)\n(define first helix.static.first)\n".to_string()),
-                ("second".to_string(), "(provide second)\n(define second helix.static.second)\n".to_string()),
+                (
+                    "first".to_string(),
+                    "(provide first)\n(define first helix.static.first)\n".to_string(),
+                ),
+                (
+                    "second".to_string(),
+                    "(provide second)\n(define second helix.static.second)\n".to_string(),
+                ),
             ],
         );
-        let first_pos = final_text.find("(provide first)").expect("first must exist");
-        let second_pos = final_text.find("(provide second)").expect("second must exist");
+        let first_pos = final_text
+            .find("(provide first)")
+            .expect("first must exist");
+        let second_pos = final_text
+            .find("(provide second)")
+            .expect("second must exist");
         assert!(first_pos < second_pos, "insertion order must be preserved");
     }
 }
@@ -911,7 +939,6 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
             template_function_arity_1($name, $doc);
         }};
     }
-
 
     let mut template_function_arity_0 = |name: &str, doc: &str| {
         if generate_sources {
@@ -3216,7 +3243,9 @@ impl HelixConfiguration {
                         let glob = globset::Glob::new(pattern)?;
                         builder.add(glob);
                     }
-                    config.required_root_patterns = Some(helix_core::syntax::config::GlobSet::from_inner(builder.build()?, patterns));
+                    config.required_root_patterns = Some(
+                        helix_core::syntax::config::GlobSet::from_inner(builder.build()?, patterns),
+                    );
                 }
             }
         } else {
@@ -3261,7 +3290,9 @@ impl HelixConfiguration {
                         let glob = globset::Glob::new(pattern)?;
                         builder.add(glob);
                     }
-                    config.required_root_patterns = Some(helix_core::syntax::config::GlobSet::from_inner(builder.build()?, patterns));
+                    config.required_root_patterns = Some(
+                        helix_core::syntax::config::GlobSet::from_inner(builder.build()?, patterns),
+                    );
                 }
             }
 
@@ -6055,7 +6086,9 @@ fn current_path(cx: &mut Context) -> Option<String> {
     let current_focus = cx.editor.tree.focus;
     let view = cx.editor.tree.try_get(current_focus)?;
     let current_doc = cx.editor.documents.get(&view.doc)?;
-    current_doc.path().and_then(|x| x.to_str().map(|x| x.to_string()))
+    current_doc
+        .path()
+        .and_then(|x| x.to_str().map(|x| x.to_string()))
 }
 
 fn set_scratch_buffer_name(cx: &mut Context, name: String) {
@@ -6069,9 +6102,15 @@ fn set_scratch_buffer_name(cx: &mut Context, name: String) {
 
 fn set_buffer_uri(cx: &mut Context, uri: SteelString) -> anyhow::Result<()> {
     let current_focus = cx.editor.tree.focus;
-    let view = cx.editor.tree.try_get(current_focus)
+    let view = cx
+        .editor
+        .tree
+        .try_get(current_focus)
         .ok_or_else(|| anyhow::anyhow!("No active view"))?;
-    let current_doc = cx.editor.documents.get_mut(&view.doc)
+    let current_doc = cx
+        .editor
+        .documents
+        .get_mut(&view.doc)
         .ok_or_else(|| anyhow::anyhow!("No active document"))?;
 
     if let Ok(url) = helix_stdx::Url::from_str(uri.as_str()) {
@@ -6987,21 +7026,13 @@ pub fn clear_plugin_style_overlays(cx: &mut Context) {
 /// virtual lines that should render above source line `LINE-IDX`. An empty
 /// list clears the entry. The plugin is responsible for leading whitespace
 /// so limits line up with their operator's column.
-pub fn set_math_lines_above(
-    cx: &mut Context,
-    line_idx: usize,
-    lines_val: steel::rvals::SteelVal,
-) {
+pub fn set_math_lines_above(cx: &mut Context, line_idx: usize, lines_val: steel::rvals::SteelVal) {
     set_math_lines_impl(cx, line_idx, lines_val, /* above */ true);
 }
 
 /// Mirror of `set-math-lines-above!` for rows rendered BELOW the source
 /// line.
-pub fn set_math_lines_below(
-    cx: &mut Context,
-    line_idx: usize,
-    lines_val: steel::rvals::SteelVal,
-) {
+pub fn set_math_lines_below(cx: &mut Context, line_idx: usize, lines_val: steel::rvals::SteelVal) {
     set_math_lines_impl(cx, line_idx, lines_val, /* above */ false);
 }
 
@@ -7089,41 +7120,74 @@ pub fn set_output_lines_below(
         None => return,
     };
 
-    let mut lines: Vec<Vec<StyledSpan>> = Vec::new();
+    let mut lines: Vec<OutputRow> = Vec::new();
     if let steel::rvals::SteelVal::ListV(items) = lines_val {
         for item in items.iter() {
-            match item {
-                steel::rvals::SteelVal::StringV(s) => {
-                    lines.push(vec![StyledSpan::from(s.to_string())]);
-                }
-                steel::rvals::SteelVal::ListV(span_pairs) => {
-                    let mut row: Vec<StyledSpan> = Vec::new();
-                    for pair in span_pairs.iter() {
-                        let steel::rvals::SteelVal::ListV(parts) = pair else {
-                            continue;
-                        };
-                        let parts: Vec<&steel::rvals::SteelVal> = parts.iter().collect();
-                        if parts.len() < 2 {
-                            continue;
-                        }
-                        let text = match parts[0] {
-                            steel::rvals::SteelVal::StringV(s) => s.to_string(),
-                            _ => continue,
-                        };
-                        let scope = match parts[1] {
-                            steel::rvals::SteelVal::StringV(s) => Some(s.to_string()),
-                            _ => None,
-                        };
-                        row.push(StyledSpan { text, scope });
-                    }
-                    lines.push(row);
-                }
-                _ => {}
-            }
+            lines.push(parse_output_row(item));
         }
     }
 
     doc.set_output_lines_below(line_idx, lines);
+}
+
+const OUTPUT_BAR_MARKER: &str = "bar";
+
+fn parse_output_row(item: &steel::rvals::SteelVal) -> OutputRow {
+    match item {
+        steel::rvals::SteelVal::StringV(s) => OutputRow::new(vec![StyledSpan::from(s.to_string())]),
+        steel::rvals::SteelVal::ListV(elems) => {
+            let head = elems.iter().next();
+            if let Some(steel::rvals::SteelVal::StringV(marker)) = head {
+                if marker.as_str() == OUTPUT_BAR_MARKER {
+                    let parts: Vec<&steel::rvals::SteelVal> = elems.iter().collect();
+                    let bar_scope = parts.get(1).and_then(|v| match v {
+                        steel::rvals::SteelVal::StringV(s) => Some(s.to_string()),
+                        _ => None,
+                    });
+                    let spans = parts
+                        .get(2)
+                        .map(|p| parse_row_payload(p))
+                        .unwrap_or_default();
+                    return OutputRow::with_bar(bar_scope, spans);
+                }
+            }
+            OutputRow::new(parse_span_pairs(elems.iter()))
+        }
+        _ => OutputRow::default(),
+    }
+}
+
+fn parse_row_payload(payload: &steel::rvals::SteelVal) -> Vec<StyledSpan> {
+    match payload {
+        steel::rvals::SteelVal::StringV(s) => vec![StyledSpan::from(s.to_string())],
+        steel::rvals::SteelVal::ListV(pairs) => parse_span_pairs(pairs.iter()),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_span_pairs<'a>(
+    pairs: impl Iterator<Item = &'a steel::rvals::SteelVal>,
+) -> Vec<StyledSpan> {
+    let mut spans: Vec<StyledSpan> = Vec::new();
+    for pair in pairs {
+        let steel::rvals::SteelVal::ListV(parts) = pair else {
+            continue;
+        };
+        let parts: Vec<&steel::rvals::SteelVal> = parts.iter().collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let text = match parts[0] {
+            steel::rvals::SteelVal::StringV(s) => s.to_string(),
+            _ => continue,
+        };
+        let scope = match parts[1] {
+            steel::rvals::SteelVal::StringV(s) => Some(s.to_string()),
+            _ => None,
+        };
+        spans.push(StyledSpan { text, scope });
+    }
+    spans
 }
 
 pub fn clear_output_lines_at(cx: &mut Context, line_idx: usize) {
@@ -7251,7 +7315,13 @@ pub fn commit_output_changes_to_history(cx: &mut Context) {
 /// This prevents duplicate inline images from accumulating when a plugin
 /// re-registers the same cached image on buffer switches or after buffer
 /// mutations shift positions.
-pub fn add_raw_content(cx: &mut Context, payload: String, image_id: u64, height: u16, char_idx: usize) {
+pub fn add_raw_content(
+    cx: &mut Context,
+    payload: String,
+    image_id: u64,
+    height: u16,
+    char_idx: usize,
+) {
     use helix_core::text_annotations::RawContent;
 
     let (view, _doc) = current!(cx.editor);
@@ -7333,10 +7403,20 @@ pub fn add_raw_content_with_placeholders(
         .unwrap_or_else(|| RAW_CONTENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
 
     let payload_bytes = payload.into_bytes();
-    let placeholder_rows: Vec<String> = placeholder_rows_str.lines().map(|s| s.to_string()).collect();
+    let placeholder_rows: Vec<String> = placeholder_rows_str
+        .lines()
+        .map(|s| s.to_string())
+        .collect();
 
     if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
-        let content = RawContent::with_placeholders(char_idx, id, payload_bytes, height, width, placeholder_rows);
+        let content = RawContent::with_placeholders(
+            char_idx,
+            id,
+            payload_bytes,
+            height,
+            width,
+            placeholder_rows,
+        );
         // Use the idempotent replace-by-id variant so re-executing a
         // cell overwrites the old entry instead of stacking a second
         // one at a slightly drifted char_idx (which caused the old
@@ -7344,4 +7424,3 @@ pub fn add_raw_content_with_placeholders(
         doc.add_or_replace_raw_content(view_id, content);
     }
 }
-

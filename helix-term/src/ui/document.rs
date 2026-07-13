@@ -412,8 +412,7 @@ impl<'a> TextRenderer<'a> {
             let r = ((id_24 >> 16) & 0xFF) as u8;
             let g = ((id_24 >> 8) & 0xFF) as u8;
             let b = (id_24 & 0xFF) as u8;
-            let placeholder_style =
-                Style::default().fg(helix_view::graphics::Color::Rgb(r, g, b));
+            let placeholder_style = Style::default().fg(helix_view::graphics::Color::Rgb(r, g, b));
 
             if let Some(placeholder_rows) = &raw.placeholder_rows {
                 for (row_idx, row_text) in placeholder_rows.iter().enumerate() {
