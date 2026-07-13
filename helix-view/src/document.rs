@@ -1682,6 +1682,31 @@ impl Document {
             });
         }
 
+        // Remap notebook output virtual-row anchors the same way as raw
+        // content above. `output_lines` is keyed by LINE index, so each key is
+        // mapped by converting the anchor line to its start char in the OLD
+        // text, mapping that char through the change set with `Assoc::After`
+        // (matching every other annotation here), and converting the result
+        // back to a line in the NEW text. Without this the plugin re-renders
+        // at the shifted anchor while stale rows linger at the old key, and
+        // output appears duplicated at several line offsets.
+        if !self.output_lines.is_empty() {
+            let old_line_count = old_doc.len_lines();
+            let mut output_lines = std::mem::take(&mut self.output_lines);
+            output_lines.remap_lines(|line| {
+                if line >= old_line_count {
+                    return None;
+                }
+                let mut char_idx = old_doc.line_to_char(line);
+                changes.update_positions(std::iter::once((&mut char_idx, Assoc::After)));
+                if char_idx > new_len {
+                    return None;
+                }
+                Some(self.text.char_to_line(char_idx))
+            });
+            self.output_lines = output_lines;
+        }
+
         for highlights in self.document_highlights.values_mut() {
             let text_len = self.text.len_chars();
             let mut updated = Vec::with_capacity(highlights.ranges.len());

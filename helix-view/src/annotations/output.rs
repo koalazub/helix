@@ -76,6 +76,24 @@ impl OutputLines {
         self.below.clear();
     }
 
+    /// Remap every anchor line key through `f`, dropping keys that map to
+    /// `None` (the anchor's source line was deleted or pushed past the new
+    /// document end). Collisions — two old keys mapping to the same new line —
+    /// resolve last-writer-wins; the plugin sets at most one entry per anchor,
+    /// so a collision only arises from a pathological edit and either surviving
+    /// row set is a defensible choice.
+    pub fn remap_lines(&mut self, f: impl Fn(usize) -> Option<usize>) {
+        if self.below.is_empty() {
+            return;
+        }
+        let old = std::mem::take(&mut self.below);
+        for (line, rows) in old {
+            if let Some(new_line) = f(line) {
+                self.below.insert(new_line, rows);
+            }
+        }
+    }
+
     pub fn rows_to_reserve_after(&self, doc_line: usize) -> usize {
         self.below(doc_line).map(<[OutputRow]>::len).unwrap_or(0)
     }
@@ -139,5 +157,21 @@ mod tests {
         assert_eq!(below[1][0].scope, None);
 
         assert_eq!(lines.rows_to_reserve_after(3), 2);
+    }
+
+    #[test]
+    fn remap_lines_shifts_keys_and_drops_none() {
+        let mut lines = OutputLines::default();
+        lines.set_below(5, vec![vec![StyledSpan::from("shifted")]]);
+        lines.set_below(2, vec![vec![StyledSpan::from("dropped")]]);
+
+        // Simulate an insertion at line 3 that pushes lines >= 3 down by 2,
+        // while line 2 (above the edit) is deleted -> None.
+        lines.remap_lines(|line| if line >= 3 { Some(line + 2) } else { None });
+
+        assert!(lines.below(5).is_none());
+        assert!(lines.below(2).is_none());
+        let moved = lines.below(7).expect("line 5 rows moved to line 7");
+        assert_eq!(moved[0][0].text, "shifted");
     }
 }
