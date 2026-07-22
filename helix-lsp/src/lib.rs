@@ -1151,4 +1151,99 @@ mod tests {
         assert!(transaction.apply(&mut source));
         assert_eq!(source, "XbcdYf");
     }
+
+    #[test]
+    fn single_whole_document_edit_diffs_and_keeps_cursor() {
+        use lsp::{Position, Range, TextEdit};
+
+        let source = Rope::from_str("aaa\nbbb\nccc\n");
+        let edits = vec![TextEdit {
+            range: Range {
+                start: Position::new(0, 0),
+                end: Position::new(3, 0),
+            },
+            new_text: "aaa\nbZb\nccc\n".to_string(),
+        }];
+
+        let transaction = generate_transaction_from_edits(&source, edits, OffsetEncoding::Utf8);
+
+        let cursor = helix_core::Range::point(1).map(transaction.changes());
+        assert_eq!(cursor.head, 1);
+        assert_ne!(cursor.head, source.len_chars());
+
+        let mut applied = source.clone();
+        assert!(transaction.apply(&mut applied));
+        assert_eq!(applied, "aaa\nbZb\nccc\n");
+    }
+
+    #[test]
+    fn single_whole_document_edit_identical_text_is_noop() {
+        use lsp::{Position, Range, TextEdit};
+
+        let source = Rope::from_str("aaa\nbbb\nccc\n");
+        let edits = vec![TextEdit {
+            range: Range {
+                start: Position::new(0, 0),
+                end: Position::new(3, 0),
+            },
+            new_text: "aaa\nbbb\nccc\n".to_string(),
+        }];
+
+        let transaction = generate_transaction_from_edits(&source, edits, OffsetEncoding::Utf8);
+        assert!(transaction.changes().is_empty());
+    }
+
+    #[test]
+    fn multiple_edits_bypass_the_document_diff() {
+        use lsp::{Position, Range, TextEdit};
+
+        let source = Rope::from_str("aaa\nbbb\nccc\n");
+        let edits = vec![
+            TextEdit {
+                range: Range {
+                    start: Position::new(0, 0),
+                    end: Position::new(0, 1),
+                },
+                new_text: "X".to_string(),
+            },
+            TextEdit {
+                range: Range {
+                    start: Position::new(2, 2),
+                    end: Position::new(2, 3),
+                },
+                new_text: "Y".to_string(),
+            },
+        ];
+
+        let transaction = generate_transaction_from_edits(&source, edits, OffsetEncoding::Utf8);
+
+        let verbatim = helix_core::Transaction::change(
+            &source,
+            [(0, 1, Some("X".into())), (10, 11, Some("Y".into()))].into_iter(),
+        );
+        assert_eq!(transaction, verbatim);
+
+        let middle = helix_core::Range::point(5).map(transaction.changes());
+        assert_eq!(middle.head, 5);
+    }
+
+    #[test]
+    fn whole_document_edit_with_end_past_last_line_is_detected() {
+        use lsp::{Position, Range, TextEdit};
+
+        let source = Rope::from_str("aaa\nbbb\nccc\n");
+        let edits = vec![TextEdit {
+            range: Range {
+                start: Position::new(0, 0),
+                end: Position::new(99, 0),
+            },
+            new_text: "aaa\nbZb\nccc\n".to_string(),
+        }];
+
+        let transaction = generate_transaction_from_edits(&source, edits, OffsetEncoding::Utf8);
+
+        let cursor = helix_core::Range::point(1).map(transaction.changes());
+        assert_eq!(cursor.head, 1);
+        assert_ne!(cursor.head, source.len_chars());
+    }
 }
