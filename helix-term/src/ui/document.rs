@@ -579,6 +579,7 @@ impl<'a> TextRenderer<'a> {
         if (y as usize) < self.offset.row {
             return (x, y);
         }
+        let y = y - self.offset.row as u16;
         self.surface.set_string_truncated(
             x,
             y + self.viewport.y,

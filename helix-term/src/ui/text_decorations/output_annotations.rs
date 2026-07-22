@@ -76,12 +76,18 @@ impl Decoration for OutputAnnotations<'_> {
         let viewport_height = renderer.viewport.height;
         let viewport_width = renderer.viewport.width;
         let viewport_x = renderer.viewport.x;
+        let offset_row = renderer.offset.row as u16;
         let mut rows_used: u16 = 0;
 
         for row in below.iter() {
-            let render_row = base_row + rows_used;
-            if render_row >= viewport_height {
-                break;
+            let block_row = base_row + rows_used;
+            match row_placement(block_row, offset_row, viewport_height) {
+                RowPlacement::Above => {
+                    rows_used += 1;
+                    continue;
+                }
+                RowPlacement::Below => break,
+                RowPlacement::Visible => {}
             }
             let bar_width = if row.bar_scope.is_some() {
                 BAR_WIDTH
@@ -93,7 +99,7 @@ impl Decoration for OutputAnnotations<'_> {
                     let style = self.style_for_scope(Some(bar_scope));
                     renderer.set_string_truncated(
                         viewport_x,
-                        render_row,
+                        block_row,
                         BAR_GLYPH,
                         bar_width as usize,
                         |_| style,
@@ -106,7 +112,7 @@ impl Decoration for OutputAnnotations<'_> {
                 let style = self.style_for_scope(draw.span.scope.as_deref());
                 renderer.set_string_truncated(
                     viewport_x + draw.col,
-                    render_row,
+                    block_row,
                     &draw.span.text,
                     draw.remaining as usize,
                     |_| style,
@@ -118,6 +124,21 @@ impl Decoration for OutputAnnotations<'_> {
         }
 
         Position::new(rows_used as usize, 0)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RowPlacement {
+    Above,
+    Visible,
+    Below,
+}
+
+fn row_placement(block_row: u16, offset_row: u16, viewport_height: u16) -> RowPlacement {
+    match block_row.checked_sub(offset_row) {
+        None => RowPlacement::Above,
+        Some(screen_row) if screen_row >= viewport_height => RowPlacement::Below,
+        Some(_) => RowPlacement::Visible,
     }
 }
 
@@ -228,5 +249,102 @@ mod tests {
         assert!(plan[0].truncated);
         assert_eq!(plan[0].col, BAR_WIDTH);
         assert_eq!(plan[0].remaining, 0);
+    }
+
+    #[test]
+    fn placement_without_scroll_is_visible_at_block_row() {
+        assert_eq!(row_placement(0, 0, 20), RowPlacement::Visible);
+        assert_eq!(row_placement(5, 0, 20), RowPlacement::Visible);
+        assert_eq!(row_placement(19, 0, 20), RowPlacement::Visible);
+        assert_eq!(row_placement(20, 0, 20), RowPlacement::Below);
+    }
+
+    #[test]
+    fn placement_scrolled_into_block_shifts_by_offset() {
+        assert_eq!(row_placement(10, 3, 20), RowPlacement::Visible);
+        assert_eq!(row_placement(3, 3, 20), RowPlacement::Visible);
+    }
+
+    #[test]
+    fn placement_above_viewport_top_is_skipped() {
+        assert_eq!(row_placement(0, 3, 20), RowPlacement::Above);
+        assert_eq!(row_placement(2, 3, 20), RowPlacement::Above);
+    }
+
+    #[test]
+    fn placement_at_and_past_bottom_edge() {
+        assert_eq!(row_placement(22, 3, 20), RowPlacement::Visible);
+        assert_eq!(row_placement(23, 3, 20), RowPlacement::Below);
+    }
+
+    fn render_scenario(offset_row: usize) -> Vec<String> {
+        use arc_swap::ArcSwap;
+        use helix_core::{syntax, Rope};
+        use helix_view::annotations::output::OutputRow;
+        use helix_view::editor::Config;
+        use helix_view::graphics::Rect;
+        use std::sync::Arc;
+        use tui::buffer::{Buffer as Surface, RawSurface};
+
+        let mut doc = Document::from(
+            Rope::from_str("cell\nafter\n"),
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        );
+        doc.set_output_lines_below(
+            0,
+            (0..6)
+                .map(|i| OutputRow::new(vec![StyledSpan::from(format!("OUT{i}"))]))
+                .collect(),
+        );
+
+        let theme = Theme::default();
+        let viewport = Rect::new(0, 0, 40, 20);
+        let mut surface = Surface::empty(viewport);
+        let mut raw = RawSurface::new();
+        let offset = Position::new(offset_row, 0);
+        let mut renderer =
+            TextRenderer::new(&mut surface, &mut raw, &doc, &theme, offset, viewport);
+
+        let mut anno = OutputAnnotations::new(&doc, &theme);
+        let pos = LinePos {
+            first_visual_line: true,
+            doc_line: 0,
+            visual_line: 0,
+        };
+        let virt_off = Position::new(1, 0);
+        anno.render_virt_lines(&mut renderer, pos, virt_off);
+
+        (0..viewport.height)
+            .map(|y| {
+                (0..viewport.width)
+                    .map(|x| surface.get(x, y).map_or(" ", |c| &*c.symbol))
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn output_rows_land_below_anchor_without_scroll() {
+        let rows = render_scenario(0);
+        assert_eq!(rows[1], "OUT0");
+        assert_eq!(rows[2], "OUT1");
+        assert_eq!(rows[6], "OUT5");
+    }
+
+    #[test]
+    fn output_rows_land_below_anchor_scrolled_into_virtual_region() {
+        let rows = render_scenario(3);
+        assert_eq!(rows[0], "OUT2", "screen row 0");
+        assert_eq!(rows[1], "OUT3", "screen row 1");
+        assert_eq!(rows[2], "OUT4", "screen row 2");
+        assert_eq!(rows[3], "OUT5", "screen row 3");
+        for (y, row) in rows.iter().enumerate() {
+            assert!(!row.contains("OUT0"), "OUT0 leaked at row {y}: {row:?}");
+            assert!(!row.contains("OUT1"), "OUT1 leaked at row {y}: {row:?}");
+        }
     }
 }
