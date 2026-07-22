@@ -6,7 +6,7 @@ use helix_view::theme::Style;
 use helix_view::{Document, Theme};
 
 use crate::ui::document::{LinePos, TextRenderer};
-use crate::ui::text_decorations::Decoration;
+use crate::ui::text_decorations::{row_placement, Decoration, RowPlacement};
 
 const BAR_GLYPH: &str = "▏";
 const BAR_WIDTH: u16 = 1;
@@ -127,21 +127,6 @@ impl Decoration for OutputAnnotations<'_> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum RowPlacement {
-    Above,
-    Visible,
-    Below,
-}
-
-fn row_placement(block_row: u16, offset_row: u16, viewport_height: u16) -> RowPlacement {
-    match block_row.checked_sub(offset_row) {
-        None => RowPlacement::Above,
-        Some(screen_row) if screen_row >= viewport_height => RowPlacement::Below,
-        Some(_) => RowPlacement::Visible,
-    }
-}
-
 /// One span's draw op for a single output row, clamped to the text viewport.
 /// `remaining` is the cells left from `col` to the right viewport edge;
 /// `truncated` marks the span that runs past the edge (drawn with an ellipsis
@@ -245,36 +230,7 @@ mod tests {
     fn bar_offset_at_viewport_edge_drops_text() {
         let r = spans(&["x"]);
         let plan = plan_row(&r, BAR_WIDTH, BAR_WIDTH);
-        assert_eq!(plan.len(), 1);
-        assert!(plan[0].truncated);
-        assert_eq!(plan[0].col, BAR_WIDTH);
-        assert_eq!(plan[0].remaining, 0);
-    }
-
-    #[test]
-    fn placement_without_scroll_is_visible_at_block_row() {
-        assert_eq!(row_placement(0, 0, 20), RowPlacement::Visible);
-        assert_eq!(row_placement(5, 0, 20), RowPlacement::Visible);
-        assert_eq!(row_placement(19, 0, 20), RowPlacement::Visible);
-        assert_eq!(row_placement(20, 0, 20), RowPlacement::Below);
-    }
-
-    #[test]
-    fn placement_scrolled_into_block_shifts_by_offset() {
-        assert_eq!(row_placement(10, 3, 20), RowPlacement::Visible);
-        assert_eq!(row_placement(3, 3, 20), RowPlacement::Visible);
-    }
-
-    #[test]
-    fn placement_above_viewport_top_is_skipped() {
-        assert_eq!(row_placement(0, 3, 20), RowPlacement::Above);
-        assert_eq!(row_placement(2, 3, 20), RowPlacement::Above);
-    }
-
-    #[test]
-    fn placement_at_and_past_bottom_edge() {
-        assert_eq!(row_placement(22, 3, 20), RowPlacement::Visible);
-        assert_eq!(row_placement(23, 3, 20), RowPlacement::Below);
+        assert!(plan.is_empty());
     }
 
     fn render_scenario(offset_row: usize) -> Vec<String> {

@@ -149,6 +149,21 @@ impl<'a> DecorationManager<'a> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum RowPlacement {
+    Above,
+    Visible,
+    Below,
+}
+
+pub(super) fn row_placement(block_row: u16, offset_row: u16, viewport_height: u16) -> RowPlacement {
+    match block_row.checked_sub(offset_row) {
+        None => RowPlacement::Above,
+        Some(screen_row) if screen_row >= viewport_height => RowPlacement::Below,
+        Some(_) => RowPlacement::Visible,
+    }
+}
+
 /// Cursor rendering is done externally so all the cursor decoration
 /// does is save the position of primary cursor
 pub struct Cursor<'a> {
@@ -176,5 +191,36 @@ impl Decoration for Cursor<'_> {
             self.cache.set(Some(position));
         }
         usize::MAX
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{row_placement, RowPlacement};
+
+    #[test]
+    fn placement_without_scroll_is_visible_at_block_row() {
+        assert_eq!(row_placement(0, 0, 20), RowPlacement::Visible);
+        assert_eq!(row_placement(5, 0, 20), RowPlacement::Visible);
+        assert_eq!(row_placement(19, 0, 20), RowPlacement::Visible);
+        assert_eq!(row_placement(20, 0, 20), RowPlacement::Below);
+    }
+
+    #[test]
+    fn placement_scrolled_into_block_shifts_by_offset() {
+        assert_eq!(row_placement(10, 3, 20), RowPlacement::Visible);
+        assert_eq!(row_placement(3, 3, 20), RowPlacement::Visible);
+    }
+
+    #[test]
+    fn placement_above_viewport_top_is_skipped() {
+        assert_eq!(row_placement(0, 3, 20), RowPlacement::Above);
+        assert_eq!(row_placement(2, 3, 20), RowPlacement::Above);
+    }
+
+    #[test]
+    fn placement_at_and_past_bottom_edge() {
+        assert_eq!(row_placement(22, 3, 20), RowPlacement::Visible);
+        assert_eq!(row_placement(23, 3, 20), RowPlacement::Below);
     }
 }

@@ -35,7 +35,7 @@ use helix_view::theme::Style;
 use helix_view::{Document, Theme};
 
 use crate::ui::document::{LinePos, TextRenderer};
-use crate::ui::text_decorations::Decoration;
+use crate::ui::text_decorations::{row_placement, Decoration, RowPlacement};
 
 pub struct MathAnnotations<'a> {
     lines: &'a MathLines,
@@ -84,32 +84,108 @@ impl Decoration for MathAnnotations<'_> {
             return Position::new(0, 0);
         }
 
-        let base_row = (pos.visual_line + virt_off.row as u16) as u16;
+        let base_row = pos.visual_line + virt_off.row as u16;
         let viewport_height = renderer.viewport.height;
+        let offset_row = renderer.offset.row as u16;
         let mut rows_used: u16 = 0;
 
-        // 1. Paint `below[pos.doc_line]` immediately after the source line.
         for line in below.iter() {
-            let row = base_row + rows_used;
-            if row >= viewport_height {
-                break;
+            let block_row = base_row + rows_used;
+            match row_placement(block_row, offset_row, viewport_height) {
+                RowPlacement::Above => {
+                    rows_used += 1;
+                    continue;
+                }
+                RowPlacement::Below => break,
+                RowPlacement::Visible => {}
             }
-            renderer.set_string(0, row, line, self.style);
+            renderer.set_string(0, block_row, line, self.style);
             rows_used += 1;
         }
 
-        // 2. Paint `above[pos.doc_line + 1]` directly above the next source
-        //    line. The rows are emitted immediately after (1) — when the
-        //    next source line renders it draws on the row that follows.
         for line in above_next.iter() {
-            let row = base_row + rows_used;
-            if row >= viewport_height {
-                break;
+            let block_row = base_row + rows_used;
+            match row_placement(block_row, offset_row, viewport_height) {
+                RowPlacement::Above => {
+                    rows_used += 1;
+                    continue;
+                }
+                RowPlacement::Below => break,
+                RowPlacement::Visible => {}
             }
-            renderer.set_string(0, row, line, self.style);
+            renderer.set_string(0, block_row, line, self.style);
             rows_used += 1;
         }
 
         Position::new(rows_used as usize, 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn render_math(offset_row: usize) -> Vec<String> {
+        use arc_swap::ArcSwap;
+        use helix_core::{syntax, Rope};
+        use helix_view::editor::Config;
+        use helix_view::graphics::Rect;
+        use std::sync::Arc;
+        use tui::buffer::{Buffer as Surface, RawSurface};
+
+        let mut doc = Document::from(
+            Rope::from_str("cell\nafter\n"),
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        );
+        doc.set_math_lines_below(0, (0..6).map(|i| format!("M{i}")).collect());
+
+        let theme = Theme::default();
+        let viewport = Rect::new(0, 0, 40, 20);
+        let mut surface = Surface::empty(viewport);
+        let mut raw = RawSurface::new();
+        let offset = Position::new(offset_row, 0);
+        let mut renderer =
+            TextRenderer::new(&mut surface, &mut raw, &doc, &theme, offset, viewport);
+
+        let mut anno = MathAnnotations::new(&doc, &theme);
+        let pos = LinePos {
+            first_visual_line: true,
+            doc_line: 0,
+            visual_line: 0,
+        };
+        anno.render_virt_lines(&mut renderer, pos, Position::new(1, 0));
+
+        (0..viewport.height)
+            .map(|y| {
+                (0..viewport.width)
+                    .map(|x| surface.get(x, y).map_or(" ", |c| &*c.symbol))
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn math_rows_land_below_anchor_without_scroll() {
+        let rows = render_math(0);
+        assert_eq!(rows[1], "M0");
+        assert_eq!(rows[2], "M1");
+        assert_eq!(rows[6], "M5");
+    }
+
+    #[test]
+    fn math_rows_shift_up_by_offset_when_scrolled_into_virtual_region() {
+        let rows = render_math(3);
+        assert_eq!(rows[0], "M2", "screen row 0");
+        assert_eq!(rows[1], "M3", "screen row 1");
+        assert_eq!(rows[2], "M4", "screen row 2");
+        assert_eq!(rows[3], "M5", "screen row 3");
+        for (y, row) in rows.iter().enumerate() {
+            assert!(!row.contains("M0"), "M0 leaked at row {y}: {row:?}");
+            assert!(!row.contains("M1"), "M1 leaked at row {y}: {row:?}");
+        }
     }
 }
