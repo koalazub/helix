@@ -2089,7 +2089,13 @@ fn generate_module(filename: &str, module: &str) {
 
         target_directory.push(filename);
 
-        std::fs::write(target_directory, module).unwrap();
+        let unchanged = std::fs::read_to_string(&target_directory)
+            .map(|existing| existing == module)
+            .unwrap_or(false);
+
+        if !unchanged {
+            std::fs::write(target_directory, module).unwrap();
+        }
     }
 }
 
