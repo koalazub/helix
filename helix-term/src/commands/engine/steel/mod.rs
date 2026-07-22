@@ -1,4 +1,5 @@
 pub mod components;
+mod init_cache;
 
 use arc_swap::{ArcSwap, ArcSwapAny};
 use helix_core::{
@@ -913,32 +914,6 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
         .register_fn_with_ctx(CTX, "get-helix-cwd", get_helix_cwd)
         .register_fn_with_ctx(CTX, "move-window-far-left", move_window_to_the_left)
         .register_fn_with_ctx(CTX, "move-window-far-right", move_window_to_the_right);
-
-    let mut template_function_arity_1 = |name: &str, doc: &str| {
-        if generate_sources {
-            let docstring = format_docstring(doc);
-            pending_emits.push((
-                name.to_string(),
-                format!(
-                    r#"
-(provide {})
-;;@doc
-{}
-(define ({} arg)
-    (helix.static.{} *helix.cx* arg))
-"#,
-                    name, docstring, name, name
-                ),
-            ));
-        }
-    };
-
-    macro_rules! function1 {
-        ($name:expr, $function:expr, $doc:expr) => {{
-            module.register_fn($name, $function);
-            template_function_arity_1($name, $doc);
-        }};
-    }
 
     let mut template_function_arity_0 = |name: &str, doc: &str| {
         if generate_sources {
@@ -2707,10 +2682,7 @@ impl SteelScriptingEngine {
         event: KeyEvent,
     ) -> Option<KeymapResult> {
         let current_focus = cx.editor.tree.focus;
-        let view = match cx.editor.tree.try_get(current_focus) {
-            Some(v) => v,
-            None => return None,
-        };
+        let view = cx.editor.tree.try_get(current_focus)?;
 
         let extension = {
             let current_doc = cx.editor.documents.get(&view.doc);
@@ -3980,18 +3952,10 @@ fn run_initialization_script(
 
         let helix_module_path = steel_init_file();
 
-        // These contents need to be registered with the path?
         if let Ok(contents) = std::fs::read_to_string(&helix_module_path) {
-            let res = guard.run_with_reference_from_path::<Context, Context>(
-                cx,
-                CTX,
-                &contents,
-                helix_module_path,
-            );
-
-            match res {
-                Ok(_) => {}
-                Err(e) => present_error_inside_engine_context(cx, guard, e),
+            if let Err(e) = init_cache::run_init_script(guard, cx, CTX, contents, helix_module_path)
+            {
+                present_error_inside_engine_context(cx, guard, e);
             }
 
             log::info!("Finished loading init.scm!")

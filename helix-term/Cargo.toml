@@ -35,7 +35,7 @@ default = ["git", "steel"] # Add steel here for development
 unicode-lines = ["helix-core/unicode-lines", "helix-view/unicode-lines"]
 integration = ["helix-event/integration_test"]
 git = ["helix-vcs/git"]
-steel = ["dep:steel-core", "dep:steel-doc", "helix-core/steel", "helix-view/steel", "tui/steel", "helix-lsp/steel"]
+steel = ["dep:steel-core", "dep:steel-doc", "dep:bincode", "helix-core/steel", "helix-view/steel", "tui/steel", "helix-lsp/steel"]
 
 [[bin]]
 name = "hx"
@@ -89,6 +89,7 @@ serde = { version = "1.0", features = ["derive"] }
 # plugin support
 steel-core = { workspace = true, optional = true }
 steel-doc = { git = "https://github.com/koalazub/steel.git", rev = "785149cc0d33498077668afa2142dc36425f24eb", optional = true }
+bincode = { version = "1.3.3", optional = true }
 
 globset = "0.4.16"
 dashmap = "6.2"
