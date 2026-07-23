@@ -367,12 +367,14 @@ impl Completion {
         // The score computation is a heuristic derived from Nucleo internal constants that may
         // move upstream in the future. I want to test this out here to settle on a good number.
         let min_score = (7 + pattern.needle_text().len() as u32 * 14) / 3;
+        let typed = self.filter.as_str();
         matches.sort_unstable_by_key(|&(i, score)| {
             let option = &options[i as usize];
             (
                 score <= min_score,
                 Reverse(option.preselect()),
                 option.provider_priority(),
+                Reverse(option.filter_text().contains(typed)),
                 Reverse(score),
                 i,
             )
