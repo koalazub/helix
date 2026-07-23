@@ -42,6 +42,18 @@ impl StaleTags {
         self.tags.clear();
     }
 
+    pub fn remap_lines(&mut self, f: impl Fn(usize) -> Option<usize>) {
+        if self.tags.is_empty() {
+            return;
+        }
+        let old = std::mem::take(&mut self.tags);
+        for (line, text) in old {
+            if let Some(new_line) = f(line) {
+                self.tags.insert(new_line, text);
+            }
+        }
+    }
+
     pub fn rows_to_reserve_after(&self, doc_line: usize) -> usize {
         usize::from(self.tags.contains_key(&doc_line))
     }

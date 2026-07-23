@@ -85,6 +85,20 @@ impl MathLines {
         self.below.clear();
     }
 
+    pub fn remap_lines(&mut self, f: impl Fn(usize) -> Option<usize>) {
+        for bucket in [&mut self.above, &mut self.below] {
+            if bucket.is_empty() {
+                continue;
+            }
+            let old = std::mem::take(bucket);
+            for (line, rows) in old {
+                if let Some(new_line) = f(line) {
+                    bucket.insert(new_line, rows);
+                }
+            }
+        }
+    }
+
     /// Total virtual rows the formatter must reserve after `doc_line`:
     /// that line's own below bucket plus the next line's above bucket
     /// (emulated here because Helix only has a reserve-after-line

@@ -1688,10 +1688,10 @@ impl Document {
         // back to a line in the NEW text. Without this the plugin re-renders
         // at the shifted anchor while stale rows linger at the old key, and
         // output appears duplicated at several line offsets.
-        if !self.output_lines.is_empty() {
+        if !self.output_lines.is_empty() || !self.stale_tags.is_empty() || !self.math_lines.is_empty()
+        {
             let old_line_count = old_doc.len_lines();
-            let mut output_lines = std::mem::take(&mut self.output_lines);
-            output_lines.remap_lines(|line| {
+            let remap = |line: usize| {
                 if line >= old_line_count {
                     return None;
                 }
@@ -1701,8 +1701,16 @@ impl Document {
                     return None;
                 }
                 Some(self.text.char_to_line(char_idx))
-            });
+            };
+            let mut output_lines = std::mem::take(&mut self.output_lines);
+            output_lines.remap_lines(remap);
             self.output_lines = output_lines;
+            let mut stale_tags = std::mem::take(&mut self.stale_tags);
+            stale_tags.remap_lines(remap);
+            self.stale_tags = stale_tags;
+            let mut math_lines = std::mem::take(&mut self.math_lines);
+            math_lines.remap_lines(remap);
+            self.math_lines = math_lines;
         }
 
         for highlights in self.document_highlights.values_mut() {
