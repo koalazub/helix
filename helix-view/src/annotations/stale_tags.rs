@@ -15,15 +15,20 @@ use crate::Document;
 #[derive(Debug, Default, Clone)]
 pub struct StaleTags {
     tags: HashMap<usize, String>,
+    above: HashMap<usize, String>,
 }
 
 impl StaleTags {
     pub fn is_empty(&self) -> bool {
-        self.tags.is_empty()
+        self.tags.is_empty() && self.above.is_empty()
     }
 
     pub fn tag(&self, line_idx: usize) -> Option<&str> {
         self.tags.get(&line_idx).map(String::as_str)
+    }
+
+    pub fn tag_above(&self, line_idx: usize) -> Option<&str> {
+        self.above.get(&line_idx).map(String::as_str)
     }
 
     pub fn set(&mut self, line_idx: usize, text: String) {
@@ -34,28 +39,41 @@ impl StaleTags {
         }
     }
 
+    pub fn set_above(&mut self, line_idx: usize, text: String) {
+        if text.is_empty() {
+            self.above.remove(&line_idx);
+        } else {
+            self.above.insert(line_idx, text);
+        }
+    }
+
     pub fn clear_at(&mut self, line_idx: usize) {
         self.tags.remove(&line_idx);
+        self.above.remove(&line_idx);
     }
 
     pub fn clear(&mut self) {
         self.tags.clear();
+        self.above.clear();
     }
 
     pub fn remap_lines(&mut self, f: impl Fn(usize) -> Option<usize>) {
-        if self.tags.is_empty() {
-            return;
-        }
-        let old = std::mem::take(&mut self.tags);
-        for (line, text) in old {
-            if let Some(new_line) = f(line) {
-                self.tags.insert(new_line, text);
+        for bucket in [&mut self.tags, &mut self.above] {
+            if bucket.is_empty() {
+                continue;
+            }
+            let old = std::mem::take(bucket);
+            for (line, text) in old {
+                if let Some(new_line) = f(line) {
+                    bucket.insert(new_line, text);
+                }
             }
         }
     }
 
     pub fn rows_to_reserve_after(&self, doc_line: usize) -> usize {
         usize::from(self.tags.contains_key(&doc_line))
+            + usize::from(self.above.contains_key(&(doc_line + 1)))
     }
 }
 

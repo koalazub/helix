@@ -2764,6 +2764,10 @@ impl Document {
         self.stale_tags.set(line_idx, text);
     }
 
+    pub fn set_stale_tag_above(&mut self, line_idx: usize, text: String) {
+        self.stale_tags.set_above(line_idx, text);
+    }
+
     /// Drop the stale-cell marker for a single source line.
     pub fn clear_stale_tag(&mut self, line_idx: usize) {
         self.stale_tags.clear_at(line_idx);

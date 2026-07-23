@@ -1129,6 +1129,7 @@ fn load_static_commands(engine: &mut Engine, generate_sources: bool) {
     }
 
     module.register_fn("set-stale-tags-below!", set_stale_tags_below);
+    module.register_fn("set-stale-tags-above!", set_stale_tags_above);
     if generate_sources {
         pending_emits.push((
             "set-stale-tags-below!".to_string(),
@@ -7212,6 +7213,20 @@ pub fn set_stale_tags_below(cx: &mut Context, line_idx: usize, lines_val: steel:
     };
     if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
         doc.set_stale_tag(line_idx, text);
+    }
+}
+
+pub fn set_stale_tags_above(cx: &mut Context, line_idx: usize, lines_val: steel::rvals::SteelVal) {
+    let text = first_string_of(lines_val);
+    let doc_id = {
+        let view_id = cx.editor.tree.focus;
+        match cx.editor.tree.try_get(view_id) {
+            Some(v) => v.doc,
+            None => return,
+        }
+    };
+    if let Some(doc) = cx.editor.documents.get_mut(&doc_id) {
+        doc.set_stale_tag_above(line_idx, text);
     }
 }
 

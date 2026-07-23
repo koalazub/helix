@@ -50,16 +50,22 @@ impl Decoration for StaleTagAnnotations<'_> {
         pos: LinePos,
         virt_off: Position,
     ) -> Position {
-        let Some(tag) = self.tags.tag(pos.doc_line) else {
+        let below = self.tags.tag(pos.doc_line);
+        let above_next = self.tags.tag_above(pos.doc_line + 1);
+        if below.is_none() && above_next.is_none() {
             return Position::new(0, 0);
-        };
-
-        let base_row = pos.visual_line + virt_off.row as u16;
-        let offset_row = renderer.offset.row as u16;
-        if row_placement(base_row, offset_row, renderer.viewport.height) == RowPlacement::Visible {
-            renderer.set_string(0, base_row, tag, self.style);
         }
-        Position::new(1, 0)
+
+        let offset_row = renderer.offset.row as u16;
+        let mut rows_used: u16 = 0;
+        for tag in [below, above_next].into_iter().flatten() {
+            let row = pos.visual_line + virt_off.row as u16 + rows_used;
+            if row_placement(row, offset_row, renderer.viewport.height) == RowPlacement::Visible {
+                renderer.set_string(0, row, tag, self.style);
+            }
+            rows_used += 1;
+        }
+        Position::new(rows_used as usize, 0)
     }
 }
 
