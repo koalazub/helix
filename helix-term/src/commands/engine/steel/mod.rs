@@ -1,5 +1,4 @@
 pub mod components;
-mod init_cache;
 
 use arc_swap::{ArcSwap, ArcSwapAny};
 use helix_core::{
@@ -3954,8 +3953,14 @@ fn run_initialization_script(
         let helix_module_path = steel_init_file();
 
         if let Ok(contents) = std::fs::read_to_string(&helix_module_path) {
-            if let Err(e) = init_cache::run_init_script(guard, cx, CTX, contents, helix_module_path)
-            {
+            let res = guard.run_with_reference_from_path::<Context, Context>(
+                cx,
+                CTX,
+                &contents,
+                helix_module_path,
+            );
+
+            if let Err(e) = res {
                 present_error_inside_engine_context(cx, guard, e);
             }
 
