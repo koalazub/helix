@@ -151,21 +151,12 @@ pub struct Document {
     pub(crate) inlay_hints: HashMap<ViewId, DocumentInlayHints>,
     /// Jump label overlays for each view.
     pub(crate) jump_labels: HashMap<ViewId, Vec<Overlay>>,
-    /// Plugin-managed overlays for text concealment (e.g., LaTeX symbol rendering).
-    /// Unlike jump_labels which are transient, these persist until explicitly cleared.
-    pub plugin_overlays: HashMap<ViewId, Vec<Overlay>>,
+    display_layers: crate::annotations::display_layers::DisplayLayers,
     /// nothelix: plugin-managed style highlights for in-buffer markdown
     /// rendering. Each entry is a theme scope name (e.g. `markup.bold`) and the
     /// char range it applies to; resolved against the active theme at render
     /// time. Additive feature — empty/absent for stock behaviour.
     pub plugin_style_highlights: HashMap<ViewId, Vec<(String, std::ops::Range<usize>)>>,
-    /// Plugin-managed virtual lines rendered around math-bearing source
-    /// lines. Mutate through [`Self::set_math_lines_above`] /
-    /// [`Self::set_math_lines_below`] / [`Self::clear_math_lines`] /
-    /// [`Self::clear_all_math_lines`]; read through [`Self::math_lines`].
-    math_lines: crate::annotations::math::MathLines,
-    output_lines: crate::annotations::output::OutputLines,
-    stale_tags: crate::annotations::stale_tags::StaleTags,
     /// LSP document highlights for each view, stored as char ranges.
     pub(crate) document_highlights: HashMap<ViewId, DocumentHighlights>,
     /// LSP code action hints for each view.
@@ -240,15 +231,6 @@ pub struct Document {
     // NOTE: ideally this would live on the handler for color swatches. This is blocked on a
     // large refactor that would make `&mut Editor` available on the `DocumentDidChange` event.
     pub color_swatch_controller: TaskController,
-
-    /// Raw content annotations (inline images, etc.) by view. The
-    /// per-view storage is a `SortedRawContent` — the sort-by-`char_idx`
-    /// invariant the layer iterator in `text_annotations::Layer` relies
-    /// on is enforced by the *type*, not by convention. Outside readers
-    /// go through [`Self::raw_content_for_view`]; outside writers
-    /// through `add_raw_content` / `add_or_replace_raw_content` /
-    /// `set_raw_content` / `clear_raw_content`.
-    raw_content: HashMap<ViewId, helix_core::text_annotations::SortedRawContent>,
 
     pub uri: Option<Box<Url>>,
 
@@ -795,12 +777,8 @@ impl Document {
             name: None,
             readonly: false,
             jump_labels: HashMap::new(),
-            plugin_overlays: HashMap::new(),
+            display_layers: crate::annotations::display_layers::DisplayLayers::default(),
             plugin_style_highlights: HashMap::new(),
-            math_lines: crate::annotations::math::MathLines::default(),
-            output_lines: crate::annotations::output::OutputLines::default(),
-            stale_tags: crate::annotations::stale_tags::StaleTags::default(),
-            raw_content: HashMap::new(),
             document_highlights: HashMap::new(),
             code_action_hints: HashSet::new(),
             color_swatches: None,
@@ -1348,7 +1326,7 @@ impl Document {
         self.apply(&transaction, view.id);
         self.append_changes_to_history(view);
         self.reset_modified();
-        self.raw_content.clear();
+        self.display_layers.raw_content.clear();
         self.pickup_last_saved_time();
         self.detect_indent_and_line_ending();
 
@@ -1484,7 +1462,7 @@ impl Document {
         self.view_data.remove(&view_id);
         self.inlay_hints.remove(&view_id);
         self.jump_labels.remove(&view_id);
-        self.plugin_overlays.remove(&view_id);
+        self.display_layers.plugin_overlays.remove(&view_id);
         self.plugin_style_highlights.remove(&view_id);
         self.document_highlights.remove(&view_id);
         self.document_highlight_controllers.remove(&view_id);
@@ -1641,77 +1619,7 @@ impl Document {
             apply_inlay_hint_changes(padding_after_inlay_hints);
         }
 
-        // Update raw content positions the same way we update diagnostics
-        // and inlay hints above. Without this step any inline image
-        // registered by a plugin stays pinned to whatever char offset it
-        // was created at, so every subsequent buffer mutation drifts the
-        // image away from the cell it belongs to — that's how the
-        // notebook plugin's "images pinned above the wrong cell /
-        // ghosted after scroll" bugs originate. `Assoc::After` keeps the
-        // image anchored to the character that used to follow it, which
-        // is the correct behaviour for content that was placed *before*
-        // that character.
-        //
-        // Three guard rails around `update_positions`:
-        //
-        //   1. Pre-filter entries whose char_idx is past the OLD document
-        //      length. `update_positions` panics on positions it can't
-        //      consume from the change set, and plugins don't always
-        //      maintain the invariant that positions stay in range — a
-        //      buggy plugin can leave us with dangling entries from a
-        //      session where the document shrank.
-        //   2. Pre-sort before the remap. `update_positions` accepts
-        //      unsorted iterators (it walks backwards through changes to
-        //      recover), but the cost is O(MN) in the worst case, and
-        //      the Layer iterator in text_annotations::Layer absolutely
-        //      requires a sorted slice for `partition_point` to be
-        //      correct. Sorting once up-front makes both happy.
-        //   3. Post-retain entries that landed at/past the NEW document
-        //      length, and re-sort — remapping can change the relative
-        //      order of entries that straddled a delete.
-        let old_len = old_doc.len_chars();
-        let new_len = self.text.len_chars();
-        for raw_contents in self.raw_content.values_mut() {
-            if raw_contents.is_empty() {
-                continue;
-            }
-            raw_contents.remap_positions(old_len, new_len, |rcs| {
-                changes.update_positions(rcs.iter_mut().map(|rc| (&mut rc.char_idx, Assoc::After)));
-            });
-        }
-
-        // Remap notebook output virtual-row anchors the same way as raw
-        // content above. `output_lines` is keyed by LINE index, so each key is
-        // mapped by converting the anchor line to its start char in the OLD
-        // text, mapping that char through the change set with `Assoc::After`
-        // (matching every other annotation here), and converting the result
-        // back to a line in the NEW text. Without this the plugin re-renders
-        // at the shifted anchor while stale rows linger at the old key, and
-        // output appears duplicated at several line offsets.
-        if !self.output_lines.is_empty() || !self.stale_tags.is_empty() || !self.math_lines.is_empty()
-        {
-            let old_line_count = old_doc.len_lines();
-            let remap = |line: usize| {
-                if line >= old_line_count {
-                    return None;
-                }
-                let mut char_idx = old_doc.line_to_char(line);
-                changes.update_positions(std::iter::once((&mut char_idx, Assoc::After)));
-                if char_idx > new_len {
-                    return None;
-                }
-                Some(self.text.char_to_line(char_idx))
-            };
-            let mut output_lines = std::mem::take(&mut self.output_lines);
-            output_lines.remap_lines(remap);
-            self.output_lines = output_lines;
-            let mut stale_tags = std::mem::take(&mut self.stale_tags);
-            stale_tags.remap_lines(remap);
-            self.stale_tags = stale_tags;
-            let mut math_lines = std::mem::take(&mut self.math_lines);
-            math_lines.remap_lines(remap);
-            self.math_lines = math_lines;
-        }
+        self.display_layers.remap(&old_doc, changes, &self.text);
 
         for highlights in self.document_highlights.values_mut() {
             let text_len = self.text.len_chars();
@@ -2608,11 +2516,20 @@ impl Document {
     }
 
     pub fn set_plugin_overlays(&mut self, view_id: ViewId, overlays: Vec<Overlay>) {
-        self.plugin_overlays.insert(view_id, overlays);
+        self.display_layers
+            .plugin_overlays
+            .insert(view_id, overlays);
     }
 
     pub fn clear_plugin_overlays(&mut self, view_id: ViewId) {
-        self.plugin_overlays.remove(&view_id);
+        self.display_layers.plugin_overlays.remove(&view_id);
+    }
+
+    pub fn plugin_overlays(&self, view_id: ViewId) -> Option<&[Overlay]> {
+        self.display_layers
+            .plugin_overlays
+            .get(&view_id)
+            .map(Vec::as_slice)
     }
 
     /// nothelix: set markdown style highlights (theme scope + char range) for a view.
@@ -2634,7 +2551,11 @@ impl Document {
         view_id: ViewId,
         content: helix_core::text_annotations::RawContent,
     ) {
-        self.raw_content.entry(view_id).or_default().push(content);
+        self.display_layers
+            .raw_content
+            .entry(view_id)
+            .or_default()
+            .push(content);
     }
 
     /// Add raw content, replacing any existing entry that shares the same
@@ -2666,7 +2587,8 @@ impl Document {
         view_id: ViewId,
         content: helix_core::text_annotations::RawContent,
     ) {
-        self.raw_content
+        self.display_layers
+            .raw_content
             .entry(view_id)
             .or_default()
             .replace_by_id(content);
@@ -2679,11 +2601,11 @@ impl Document {
     ) {
         let mut entry = helix_core::text_annotations::SortedRawContent::new();
         entry.set(content);
-        self.raw_content.insert(view_id, entry);
+        self.display_layers.raw_content.insert(view_id, entry);
     }
 
     pub fn clear_raw_content(&mut self, view_id: ViewId) {
-        self.raw_content.remove(&view_id);
+        self.display_layers.raw_content.remove(&view_id);
     }
 
     /// Drop only the raw-content entries whose `id` falls in `[lo, hi)`,
@@ -2692,7 +2614,7 @@ impl Document {
     /// kind refresh itself without wiping the others — which `clear_raw_content`
     /// (whole-view) would do.
     pub fn clear_raw_content_in_range(&mut self, view_id: ViewId, lo: u64, hi: u64) {
-        if let Some(entry) = self.raw_content.get_mut(&view_id) {
+        if let Some(entry) = self.display_layers.raw_content.get_mut(&view_id) {
             entry.retain(|rc| rc.id < lo || rc.id >= hi);
         }
     }
@@ -2700,7 +2622,8 @@ impl Document {
     /// Returns `true` if any raw content registered on this document has
     /// `is_animating` set, indicating continuous redraws are needed.
     pub fn has_animating_raw_content(&self) -> bool {
-        self.raw_content
+        self.display_layers
+            .raw_content
             .values()
             .any(|v| v.iter().any(|rc| rc.is_animating))
     }
@@ -2711,31 +2634,31 @@ impl Document {
     /// row immediately above the source line, index 1 is the row above that,
     /// and so on.
     pub fn set_math_lines_above(&mut self, line_idx: usize, lines: Vec<String>) {
-        self.math_lines.set_above(line_idx, lines);
+        self.display_layers.math_lines.set_above(line_idx, lines);
     }
 
     /// Register `lines` to render BELOW source line `line_idx`. Ordering
     /// follows the same row-away convention as [`Self::set_math_lines_above`].
     pub fn set_math_lines_below(&mut self, line_idx: usize, lines: Vec<String>) {
-        self.math_lines.set_below(line_idx, lines);
+        self.display_layers.math_lines.set_below(line_idx, lines);
     }
 
     /// Drop both above- and below-line math annotations for a single source
     /// line.
     pub fn clear_math_lines(&mut self, line_idx: usize) {
-        self.math_lines.clear_at(line_idx);
+        self.display_layers.math_lines.clear_at(line_idx);
     }
 
     /// Wipe every math annotation registered on this document. Called by the
     /// nothelix plugin when it re-runs the math renderer from scratch (e.g.
     /// after a buffer edit or on explicit `:math-render-clear`).
     pub fn clear_all_math_lines(&mut self) {
-        self.math_lines.clear();
+        self.display_layers.math_lines.clear();
     }
 
     /// Read-only access to the document's math line annotations.
     pub fn math_lines(&self) -> &crate::annotations::math::MathLines {
-        &self.math_lines
+        &self.display_layers.math_lines
     }
 
     pub fn set_output_lines_below(
@@ -2743,45 +2666,45 @@ impl Document {
         line_idx: usize,
         lines: Vec<crate::annotations::output::OutputRow>,
     ) {
-        self.output_lines.set_below(line_idx, lines);
+        self.display_layers.output_lines.set_below(line_idx, lines);
     }
 
     pub fn clear_output_lines_at(&mut self, line_idx: usize) {
-        self.output_lines.clear_at(line_idx);
+        self.display_layers.output_lines.clear_at(line_idx);
     }
 
     pub fn clear_all_output_lines(&mut self) {
-        self.output_lines.clear();
+        self.display_layers.output_lines.clear();
     }
 
     pub fn output_lines(&self) -> &crate::annotations::output::OutputLines {
-        &self.output_lines
+        &self.display_layers.output_lines
     }
 
     /// Set (or, with an empty `text`, clear) the stale-cell marker rendered
     /// below source line `line_idx`.
     pub fn set_stale_tag(&mut self, line_idx: usize, text: String) {
-        self.stale_tags.set(line_idx, text);
+        self.display_layers.stale_tags.set(line_idx, text);
     }
 
     pub fn set_stale_tag_above(&mut self, line_idx: usize, text: String) {
-        self.stale_tags.set_above(line_idx, text);
+        self.display_layers.stale_tags.set_above(line_idx, text);
     }
 
     /// Drop the stale-cell marker for a single source line.
     pub fn clear_stale_tag(&mut self, line_idx: usize) {
-        self.stale_tags.clear_at(line_idx);
+        self.display_layers.stale_tags.clear_at(line_idx);
     }
 
     /// Wipe every stale-cell marker registered on this document. Called by
     /// the nothelix plugin before re-scanning downstream cells from scratch.
     pub fn clear_all_stale_tags(&mut self) {
-        self.stale_tags.clear();
+        self.display_layers.stale_tags.clear();
     }
 
     /// Read-only access to the document's stale-tag annotations.
     pub fn stale_tags(&self) -> &crate::annotations::stale_tags::StaleTags {
-        &self.stale_tags
+        &self.display_layers.stale_tags
     }
 
     /// Raw content (inline images, etc.) registered on `view_id`,
@@ -2790,7 +2713,8 @@ impl Document {
         &self,
         view_id: ViewId,
     ) -> Option<&[helix_core::text_annotations::RawContent]> {
-        self.raw_content
+        self.display_layers
+            .raw_content
             .get(&view_id)
             .map(|entries| entries.as_slice())
     }
@@ -3159,7 +3083,7 @@ mod test {
 
         // Verify raw_content is present
         assert!(
-            !doc.raw_content.is_empty(),
+            !doc.display_layers.raw_content.is_empty(),
             "raw_content should have an entry"
         );
 
@@ -3169,7 +3093,7 @@ mod test {
 
         // Verify raw_content is cleared after reload
         assert!(
-            doc.raw_content.is_empty(),
+            doc.display_layers.raw_content.is_empty(),
             "raw_content should be cleared after reload"
         );
     }

@@ -476,7 +476,7 @@ impl View {
             text_annotations.add_overlay(labels, style);
         }
 
-        if let Some(overlays) = doc.plugin_overlays.get(&self.id) {
+        if let Some(overlays) = doc.plugin_overlays(self.id) {
             let style = theme.and_then(|t| t.find_highlight("ui.virtual.conceal"));
             text_annotations.add_overlay(overlays, style);
         }
