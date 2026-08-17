@@ -19,13 +19,7 @@
     eachSystem = lib.genAttrs lib.systems.flakeExposed;
     pkgsFor = eachSystem (system:
       import nixpkgs {
-        # macOS 27: opt into the SDK nixpkgs builds the darwin toolchain
-        # against, instead of the 14.4 default (rust-overlay's rustc setup
-        # hook bakes the same SDK path, keeping DEVELOPER_DIR coherent).
-        localSystem = {
-          inherit system;
-          darwinSdkVersion = "26";
-        };
+        localSystem.system = system;
         overlays = [(import rust-overlay) self.overlays.helix];
       });
     gitRev = self.rev or self.dirtyRev or null;
@@ -70,9 +64,21 @@
         in
           pkgs.mkShell {
             inputsFrom = [
-              (self.checks.${system}.helix.override {
-                includeGrammarIf = _: false;
-              })
+              (
+                (self.checks.${system}.helix.override {
+                  includeGrammarIf = _: false;
+                }).overrideAttrs
+                  (
+                    old:
+                    {
+                      # macOS 27: the apple-sdk hook wins when its version
+                      # beats the ambient one; appending it to the checks
+                      # derivation propagates SDK 26 into the shell via
+                      # inputsFrom (which overrides nativeBuildInputs env).
+                      buildInputs = (old.buildInputs or [ ]) ++ [ pkgs.apple-sdk_26 ];
+                    }
+                  )
+              )
             ];
             nativeBuildInputs = with pkgs;
               [
@@ -82,7 +88,10 @@
                 mdbook
               ]
               ++ (lib.optional (stdenv.isx86_64 && stdenv.isLinux) cargo-tarpaulin)
-              ++ (lib.optional stdenv.isLinux lldb);
+              ++ (lib.optional stdenv.isLinux lldb)
+              # macOS 27: the apple-sdk hook wins when its version beats the
+              # ambient one, so listing SDK 26 last puts the shell on it.
+              ++ (lib.optional stdenv.isDarwin apple-sdk_26);
             shellHook = ''
               export RUST_BACKTRACE="1"
               export RUSTFLAGS="''${RUSTFLAGS:-""} ${commonRustFlagsEnv} ${platformRustFlagsEnv}"
