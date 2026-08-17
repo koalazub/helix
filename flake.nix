@@ -19,7 +19,13 @@
     eachSystem = lib.genAttrs lib.systems.flakeExposed;
     pkgsFor = eachSystem (system:
       import nixpkgs {
-        localSystem.system = system;
+        # macOS 27: opt into the SDK nixpkgs builds the darwin toolchain
+        # against, instead of the 14.4 default (rust-overlay's rustc setup
+        # hook bakes the same SDK path, keeping DEVELOPER_DIR coherent).
+        localSystem = {
+          inherit system;
+          darwinSdkVersion = "26";
+        };
         overlays = [(import rust-overlay) self.overlays.helix];
       });
     gitRev = self.rev or self.dirtyRev or null;
