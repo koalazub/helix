@@ -267,6 +267,25 @@ impl Range {
     //--------------------------------
     // Alignment methods.
 
+    /// Clamp the range into the document bounds, preserving the visual
+    /// column when nothing moved. Plugin callbacks can hand Helix
+    /// positions computed against a stale rope snapshot; clamping here
+    /// keeps those ranges from panicking the grapheme-boundary pass.
+    #[must_use]
+    pub fn clamped(self, len: usize) -> Self {
+        let anchor = self.anchor.min(len);
+        let head = self.head.min(len);
+        Range {
+            anchor,
+            head,
+            old_visual_position: if anchor == self.anchor && head == self.head {
+                self.old_visual_position
+            } else {
+                None
+            },
+        }
+    }
+
     /// Compute a possibly new range from this range, with its ends
     /// shifted as needed to align with grapheme boundaries.
     ///
@@ -660,8 +679,14 @@ impl Selection {
     // 3. Ranges are non-overlapping.
     // 4. Ranges are sorted by their position in the text.
     pub fn ensure_invariants(self, text: RopeSlice) -> Self {
-        self.transform(|r| r.min_width_1(text).grapheme_aligned(text))
-            .normalize()
+        let len = text.len_chars();
+        self.transform(|range| {
+            range
+                .clamped(len)
+                .min_width_1(text)
+                .grapheme_aligned(text)
+        })
+        .normalize()
     }
 
     /// Transforms the selection into all of the left-side head positions,
@@ -1454,5 +1479,14 @@ mod test {
             vec!((1, 4), (7, 10)),
             vec!((1, 2), (3, 4), (7, 9))
         ));
+    }
+
+    #[test]
+    fn test_ensure_invariants_clamps_stale_positions() {
+        let text = Rope::from_str("short doc");
+        let len = text.len_chars();
+        let selection = Selection::new(smallvec![Range::new(len + 400, len + 400)], 0);
+        let invariants = selection.ensure_invariants(text.slice(..));
+        assert_eq!(invariants.primary(), Range::new(len, len));
     }
 }
