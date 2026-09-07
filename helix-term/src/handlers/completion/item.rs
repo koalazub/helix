@@ -124,4 +124,64 @@ impl CompletionItem {
             CompletionItem::Other(_) => false,
         }
     }
+
+    /// Whether this item should rank below code and symbol matches in the
+    /// completion menu. Julia's REPL ships ~1200 `\:`-prefixed emoji
+    /// completions that language servers return for every backslash prefix
+    /// with the same kind and no sort text as real symbols, so they match
+    /// by fuzzy accident and crowd out real completions.
+    pub fn demote_julia_emoji_below(&self, typed: &str) -> bool {
+        demote_julia_emoji_label(self.filter_text(), typed)
+    }
+}
+
+/// Reports whether a completion label should rank below real matches for
+/// the given typed filter text. Labels in Julia's `\:` emoji namespace
+/// sink, unless the typed text is empty (menu just opened) or continues
+/// an emoji name, meaning the user is explicitly asking for one.
+pub fn demote_julia_emoji_label(filter_text: &str, typed: &str) -> bool {
+    match filter_text.strip_prefix("\\:") {
+        None => false,
+        Some(name) => typed.is_empty() || !name.starts_with(typed),
+    }
+}
+
+/// Reports whether a completion label lives in Julia's `\:` emoji
+/// namespace, which carries no code meaning.
+pub fn is_julia_emoji_label(filter_text: &str) -> bool {
+    filter_text.starts_with("\\:")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{demote_julia_emoji_label, is_julia_emoji_label};
+
+    #[test]
+    fn emoji_namespace_detected_by_backslash_colon_prefix() {
+        assert!(is_julia_emoji_label("\\:apple:"));
+        assert!(is_julia_emoji_label("\\:"));
+    }
+
+    #[test]
+    fn latex_code_and_symbol_labels_are_not_emoji() {
+        for label in ["\\alpha", "\\^a", "println", ":symbol", ""] {
+            assert!(!is_julia_emoji_label(label), "{label} must not demote");
+        }
+    }
+
+    #[test]
+    fn fuzzy_matched_emoji_sink_but_explicit_requests_keep_place() {
+        assert!(demote_julia_emoji_label("\\:apple:", ""));
+        assert!(demote_julia_emoji_label("\\:apple:", "alp"));
+        assert!(!demote_julia_emoji_label("\\:apple:", "apple"));
+        assert!(!demote_julia_emoji_label("\\:apple:", "app"));
+    }
+
+    #[test]
+    fn real_symbols_never_sink() {
+        for typed in ["", "a", "alp", "alpha"] {
+            assert!(!demote_julia_emoji_label("\\alpha", typed));
+            assert!(!demote_julia_emoji_label("println", typed));
+        }
+    }
 }
